@@ -100,7 +100,11 @@ func (c *PacketConn) WaitReadFrom() (data []byte, put func(), addr net.Addr, err
 	if err != nil {
 		return
 	}
-	data, err = Unpack(data[c.Cipher.SaltSize():], data, c)
+	if len(data) < c.Cipher.SaltSize() {
+		err = ErrShortPacket // slicing past len would panic and crash the process
+	} else {
+		data, err = Unpack(data[c.Cipher.SaltSize():], data, c)
+	}
 	if err != nil {
 		if put != nil {
 			put()
