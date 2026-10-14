@@ -137,6 +137,9 @@ func (t *DomainTrie[T]) insert(parts []string, data T) {
 // 2. wildcard domain
 // 2. dot wildcard domain
 func (t *DomainTrie[T]) Search(domain string) *Node[T] {
+	if domain == "" { // hot path (hosts lookup per packet): skip building a formatted error
+		return nil
+	}
 	parts, err := ValidAndSplitDomain(domain)
 	if err != nil || parts[0] == "" {
 		return nil
