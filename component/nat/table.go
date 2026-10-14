@@ -27,6 +27,14 @@ func (t *Table) GetOrCreate(key string, maker func() C.PacketSender) (C.PacketSe
 	return item.PacketSender, loaded
 }
 
+// Get returns the sender of an existing session.
+func (t *Table) Get(key string) (C.PacketSender, bool) {
+	if item, ok := t.mapping.Load(key); ok {
+		return item.PacketSender, true
+	}
+	return nil, false
+}
+
 func (t *Table) Delete(key string) {
 	t.mapping.Delete(key)
 }
