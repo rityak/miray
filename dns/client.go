@@ -19,7 +19,13 @@ type client struct {
 	host   string
 	dialer *dnsDialer
 	schema string
+	// idle keeps finished tcp:// connections for the next query (RFC 7766
+	// connection reuse) instead of a new handshake per query (T-028).
+	idle chan net.Conn
 }
+
+// tcpIdleConnections bounds the reused connections kept per tcp:// server.
+const tcpIdleConnections = 4
 
 var _ dnsClient = (*client)(nil)
 
@@ -33,16 +39,29 @@ func (c *client) ExchangeContext(ctx context.Context, m *D.Msg) (*D.Msg, error) 
 	if c.schema != "udp" {
 		network = "tcp"
 	}
-
 	addr := net.JoinHostPort(c.host, c.port)
-	conn, err := c.dialer.DialContext(ctx, network, addr)
-	if err != nil {
-		return nil, err
-	}
-	defer conn.Close()
 
-	// miekg/dns ExchangeContext doesn't respond to context cancel.
-	// this is a workaround
+	conn, reused := c.takeIdle()
+	if conn == nil {
+		var err error
+		if conn, err = c.dialer.DialContext(ctx, network, addr); err != nil {
+			return nil, err
+		}
+	}
+	msg, err := c.exchange(ctx, conn, network, addr, m)
+	if err != nil && reused && ctx.Err() == nil {
+		// The server may have closed an idle connection; retry once on a fresh one.
+		if conn, err = c.dialer.DialContext(ctx, network, addr); err != nil {
+			return nil, err
+		}
+		msg, err = c.exchange(ctx, conn, network, addr, m)
+	}
+	return msg, err
+}
+
+// exchange owns conn: it is returned to the idle pool after a successful tcp
+// exchange and closed otherwise.
+func (c *client) exchange(ctx context.Context, conn net.Conn, network, addr string, m *D.Msg) (*D.Msg, error) {
 	type result struct {
 		msg *D.Msg
 		err error
@@ -59,13 +78,16 @@ func (c *client) ExchangeContext(ctx context.Context, m *D.Msg) (*D.Msg, error) 
 		}
 
 		msg, _, err := dClient.ExchangeWithConn(m, dConn)
+		if err == nil && network == "tcp" {
+			c.putIdle(conn)
+		} else {
+			_ = conn.Close()
+		}
 
-		// Resolvers MUST resend queries over TCP if they receive a truncated UDP response (with TC=1 set)!
 		if msg != nil && msg.Truncated && network == "udp" {
-			network = "tcp"
 			log.Debugln("[DNS] Truncated reply from %s:%s for %s over UDP, retrying over TCP", c.host, c.port, m.Question[0].String())
 			var tcpConn net.Conn
-			tcpConn, err = c.dialer.DialContext(ctx, network, addr)
+			tcpConn, err = c.dialer.DialContext(ctx, "tcp", addr)
 			if err != nil {
 				ch <- result{msg, err}
 				return
@@ -80,13 +102,47 @@ func (c *client) ExchangeContext(ctx context.Context, m *D.Msg) (*D.Msg, error) 
 
 	select {
 	case <-ctx.Done():
+		_ = conn.Close() // abort the exchange; a closed conn never reaches the pool
 		return nil, ctx.Err()
 	case ret := <-ch:
 		return ret.msg, ret.err
 	}
 }
 
-func (c *client) ResetConnection() {}
+func (c *client) takeIdle() (net.Conn, bool) {
+	if c.idle == nil {
+		return nil, false
+	}
+	select {
+	case conn := <-c.idle:
+		return conn, true
+	default:
+		return nil, false
+	}
+}
+
+func (c *client) putIdle(conn net.Conn) {
+	if c.idle == nil {
+		_ = conn.Close()
+		return
+	}
+	select {
+	case c.idle <- conn:
+	default:
+		_ = conn.Close()
+	}
+}
+
+// ResetConnection closes the idle tcp:// connections, e.g. after a network change.
+func (c *client) ResetConnection() {
+	for {
+		conn, ok := c.takeIdle()
+		if !ok {
+			return
+		}
+		_ = conn.Close()
+	}
+}
 
 func newClient(addr string, resolver resolver.Resolver, netType string, params map[string]string, proxyAdapter C.ProxyAdapter, proxyName string) *client {
 	host, port, _ := net.SplitHostPort(addr)
@@ -98,6 +154,7 @@ func newClient(addr string, resolver resolver.Resolver, netType string, params m
 	}
 	if strings.HasPrefix(netType, "tcp") {
 		c.schema = "tcp"
+		c.idle = make(chan net.Conn, tcpIdleConnections)
 	}
 	return c
 }
