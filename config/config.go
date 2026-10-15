@@ -7,6 +7,7 @@ import (
 	"net/netip"
 	"net/url"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 	_ "unsafe"
@@ -279,7 +280,7 @@ type RawTun struct {
 	AutoDetectInterface bool       `yaml:"auto-detect-interface" json:"auto-detect-interface"`
 
 	MTU        uint32 `yaml:"mtu" json:"mtu,omitempty"`
-	GSO        bool   `yaml:"gso" json:"gso,omitempty"`
+	GSO        *bool  `yaml:"gso" json:"gso,omitempty"` // nil: tunGSO picks the default (D-002)
 	GSOMaxSize uint32 `yaml:"gso-max-size" json:"gso-max-size,omitempty"`
 	//Inet4Address           []netip.Prefix `yaml:"inet4-address" json:"inet4-address,omitempty"`
 	Inet6Address                          []netip.Prefix `yaml:"inet6-address" json:"inet6-address,omitempty"`
@@ -1683,6 +1684,16 @@ func parseIPV6(rawCfg *RawConfig) {
 	}
 }
 
+// tunGSO resolves the TUN gso option. An explicit value wins; otherwise batched
+// TUN I/O (vnet_hdr, GRO/GSO) is on for Linux with the mips and system stacks,
+// which gain from it, and off elsewhere (D-002, S-003: gvisor regresses).
+func tunGSO(gso *bool, stack C.TUNStack, goos string) bool {
+	if gso != nil {
+		return *gso
+	}
+	return goos == "linux" && (stack == C.TunMips || stack == C.TunSystem)
+}
+
 func parseTun(rawTun RawTun, dns *DNS, general *General) error {
 	tunAddressPrefix := dns.FakeIPRange
 	if !tunAddressPrefix.IsValid() {
@@ -1699,7 +1710,7 @@ func parseTun(rawTun RawTun, dns *DNS, general *General) error {
 		AutoDetectInterface: rawTun.AutoDetectInterface,
 
 		MTU:                                   rawTun.MTU,
-		GSO:                                   rawTun.GSO,
+		GSO:                                   tunGSO(rawTun.GSO, rawTun.Stack, runtime.GOOS),
 		GSOMaxSize:                            rawTun.GSOMaxSize,
 		Inet4Address:                          []netip.Prefix{tunAddressPrefix},
 		Inet6Address:                          rawTun.Inet6Address,
