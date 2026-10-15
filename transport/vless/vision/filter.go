@@ -27,7 +27,18 @@ const (
 	tlsHandshakeTypeServerHello byte = 0x02
 )
 
+// filterState returns the TLS filter results for the writer.
+func (vc *Conn) filterState() (isTLS, isTLS12orAbove, enableXTLS bool, packetsToFilter int) {
+	vc.filterMu.Lock()
+	defer vc.filterMu.Unlock()
+	return vc.isTLS, vc.isTLS12orAbove, vc.enableXTLS, vc.packetsToFilter
+}
+
+// FilterTLS inspects the first packets of both directions for the TLS
+// handshake; reader and writer call it concurrently.
 func (vc *Conn) FilterTLS(buffer []byte) (index int) {
+	vc.filterMu.Lock()
+	defer vc.filterMu.Unlock()
 	if vc.packetsToFilter <= 0 {
 		return 0
 	}
