@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -174,6 +175,9 @@ type DNS struct {
 	ProxyServerPolicy     []dns.Policy
 	DirectNameServer      []dns.NameServer
 	DirectFollowPolicy    bool
+	// RawKey is the dns section as JSON: equal keys mean an identical DNS
+	// setup, so a reload may keep the answer cache (T-025).
+	RawKey string
 }
 
 // Profile config
@@ -1421,8 +1425,13 @@ func parseDNS(rawCfg *RawConfig, ruleProviders map[string]P.RuleProvider) (*DNS,
 	if cfg.RespectRules && len(cfg.ProxyServerNameserver) == 0 {
 		return nil, fmt.Errorf("if “respect-rules” is turned on, “proxy-server-nameserver” cannot be empty")
 	}
+	rawKey, keyErr := json.Marshal(cfg)
+	if keyErr != nil {
+		return nil, fmt.Errorf("dns: %w", keyErr)
+	}
 
 	dnsCfg := &DNS{
+		RawKey:            string(rawKey),
 		Enable:            cfg.Enable,
 		Listen:            cfg.Listen,
 		ListenRoutingMark: cfg.ListenRoutingMark,
