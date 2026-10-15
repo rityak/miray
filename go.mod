@@ -160,4 +160,4 @@ replace github.com/metacubex/smux => github.com/rityak/smux v0.0.0-2026101509503
 
 replace github.com/metacubex/utls => github.com/rityak/utls v0.0.0-20261015104218-792958f984ea
 
-replace github.com/metacubex/quic-go => github.com/rityak/quic-go v0.61.1-0.20261015225233-85957d2d879e
+replace github.com/metacubex/quic-go => github.com/rityak/quic-go v0.61.1-0.20261015225928-926019dd8d29
