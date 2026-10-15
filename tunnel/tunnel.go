@@ -769,15 +769,20 @@ func logMetadata(metadata *C.Metadata, rule C.Rule, remoteConn C.Connection) {
 }
 
 func match(metadata *C.Metadata, helper C.RuleMatchHelper) (C.Proxy, C.Rule, error) {
+	// Matching may resolve DNS, look up the process or dial a rematch proxy, so
+	// it works on a snapshot instead of holding configMux: a config reload would
+	// otherwise wait for the slowest lookup and new connections would queue
+	// behind it (T-010). The fields are only ever replaced wholesale.
 	configMux.RLock()
-	defer configMux.RUnlock()
+	rules, subRules, proxies := rules, subRules, proxies
+	configMux.RUnlock()
 
 	var rematchChain []string
 	for {
 		var rematchProxy C.Proxy
 		var rematchRule C.Rule
 	GetRules:
-		for _, rule := range getRules(metadata) {
+		for _, rule := range getRules(metadata, rules, subRules) {
 			if matched, ada := rule.Match(metadata, helper); matched {
 				adapter, ok := proxies[ada]
 				if !ok {
@@ -827,7 +832,7 @@ func match(metadata *C.Metadata, helper C.RuleMatchHelper) (C.Proxy, C.Rule, err
 	}
 }
 
-func getRules(metadata *C.Metadata) []C.Rule {
+func getRules(metadata *C.Metadata, rules []C.Rule, subRules map[string][]C.Rule) []C.Rule {
 	if sr, ok := subRules[metadata.SpecialRules]; ok {
 		log.Debugln("[Rule] use %s rules", metadata.SpecialRules)
 		return sr
