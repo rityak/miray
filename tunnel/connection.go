@@ -32,7 +32,19 @@ type packetSender struct {
 	fastTarget     map[netip.Addr]netip.Addr       // originToTarget for IP destinations, keyed without formatting
 	fastAddr       map[netip.AddrPort]*net.UDPAddr // resolved WriteTo address per original destination
 	mappingMutex   sync.RWMutex
+
+	// batched sends (S-005), owned by the Process goroutine
+	batch      *batchWriter
+	batchInit  bool
+	batchPkts  []C.UDPFastPacket
+	batchData  [][]byte
+	batchAddrs []*net.UDPAddr
+	batchStats [7]int // batch sizes: 1, 2-3, 4-7, 8-15, 16-31, 32-63, 64
+	batchLog   time.Time
 }
+
+// maxBatch bounds one opportunistic drain of already queued datagrams.
+const maxBatch = 64
 
 // newPacketSender return a chan based C.PacketSender
 // It ensures that packets can be sent sequentially and without blocking
@@ -159,22 +171,127 @@ func (s *packetSender) forward(pc C.PacketConn, metadata *C.Metadata, data []byt
 }
 
 func (s *packetSender) Process(pc C.PacketConn, proxy C.WriteBackProxy) {
+	defer func() {
+		if s.batch != nil {
+			log.Warnln("[S-005] batch sizes 1/2-3/4-7/8-15/16-31/32-63/64: %v", s.batchStats)
+		}
+	}()
 	for {
 		select {
 		case <-s.ctx.Done():
 			return // sender closed
 		case item := <-s.ch:
-			switch packet := item.(type) {
-			case C.UDPFastPacket: // reply path keeps the writer of the flow's earlier packets
-				s.processFast(pc, packet)
-			case C.PacketAdapter:
-				if proxy != nil {
-					proxy.UpdateWriteBack(packet)
-				}
-				s.processPacket(pc, packet)
-			}
+			s.processItem(pc, proxy, item)
 		}
 	}
+}
+
+func (s *packetSender) processItem(pc C.PacketConn, proxy C.WriteBackProxy, item senderItem) {
+	switch packet := item.(type) {
+	case C.UDPFastPacket: // reply path keeps the writer of the flow's earlier packets
+		s.processFastBatch(pc, proxy, packet)
+	case C.PacketAdapter:
+		if proxy != nil {
+			proxy.UpdateWriteBack(packet)
+		}
+		s.processPacket(pc, packet)
+	}
+}
+
+// processFastBatch takes the datagrams already queued behind first, without
+// waiting for more, and sends them with one sendmmsg when the outbound is a raw
+// UDP socket (S-005). A sparse datagram is sent alone and at once.
+func (s *packetSender) processFastBatch(pc C.PacketConn, proxy C.WriteBackProxy, first C.UDPFastPacket) {
+	if !s.batchInit {
+		s.batchInit = true
+		if ac, ok := pc.(*udpActivityConn); ok {
+			s.batch = newBatchWriter(ac.PacketConn)
+		}
+		log.Warnln("[S-005] batch writer enabled: %v", s.batch != nil)
+	}
+	if s.batch == nil {
+		s.processFast(pc, first)
+		return
+	}
+	pkts := append(s.batchPkts[:0], first)
+	var pending senderItem
+drain:
+	for len(pkts) < maxBatch {
+		select {
+		case item := <-s.ch:
+			if p, ok := item.(C.UDPFastPacket); ok {
+				pkts = append(pkts, p)
+				continue
+			}
+			pending = item
+			break drain
+		default:
+			break drain
+		}
+	}
+	s.recordBatch(len(pkts))
+	if len(pkts) == 1 { // sendmmsg of one costs ~8% more than sendto (S-005)
+		s.processFast(pc, first)
+		pkts[0] = nil // the pooled packet is recycled after Drop
+	} else {
+		s.flushBatch(pc, pkts)
+	}
+	s.batchPkts = pkts[:0]
+	if pending != nil {
+		s.processItem(pc, proxy, pending)
+	}
+}
+
+func (s *packetSender) recordBatch(n int) {
+	bucket := 0
+	for n > 1 && bucket < len(s.batchStats)-1 {
+		n >>= 1
+		bucket++
+	}
+	s.batchStats[bucket]++
+	if now := time.Now(); now.Sub(s.batchLog) > 3*time.Second { // spike instrumentation
+		s.batchLog = now
+		log.Warnln("[S-005] batch sizes 1/2-3/4-7/8-15/16-31/32-63/64: %v", s.batchStats)
+	}
+}
+
+// flushBatch writes pkts in order; an unmapped destination splits the batch and
+// takes the regular resolve path.
+func (s *packetSender) flushBatch(pc C.PacketConn, pkts []C.UDPFastPacket) {
+	datas, addrs := s.batchData[:0], s.batchAddrs[:0]
+	flush := func() {
+		if len(datas) == 0 {
+			return
+		}
+		if s.batch.write(datas, addrs) == nil {
+			pc.(*udpActivityConn).lastWrite.Store(time.Now().UnixNano())
+		}
+		datas, addrs = datas[:0], addrs[:0]
+	}
+	for _, p := range pkts {
+		dst := p.Destination()
+		s.mappingMutex.RLock()
+		addr := s.fastAddr[dst]
+		s.mappingMutex.RUnlock()
+		if addr == nil {
+			addr = s.fastAddrFor(dst)
+		}
+		if addr == nil {
+			flush()
+			s.forward(pc, &C.Metadata{NetWork: C.UDP, Type: C.TUN, DstIP: dst.Addr(), DstPort: dst.Port()}, p.Data())
+			continue
+		}
+		datas, addrs = append(datas, p.Data()), append(addrs, addr)
+	}
+	flush()
+	for i, p := range pkts {
+		p.Drop()
+		pkts[i] = nil
+	}
+	for i := range datas[:cap(datas)] {
+		datas[:cap(datas)][i] = nil // do not retain released buffers
+	}
+	s.batchData, s.batchAddrs = datas[:0], addrs[:0]
 }
 
 func (s *packetSender) dropAll() {
