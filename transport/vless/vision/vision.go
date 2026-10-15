@@ -31,11 +31,11 @@ func NewConn(conn net.Conn, tlsConn net.Conn, userUUID uuid.UUID) (*Conn, error)
 		Conn:                       conn,
 		userUUID:                   userUUID,
 		packetsToFilter:            8,
-		readProcess:                true,
-		readFilterUUID:             true,
 		writeFilterApplicationData: true,
 		writeOnceUserUUID:          userUUID.Bytes(),
 	}
+	c.readProcess.Store(true)
+	c.readFilterUUID.Store(true)
 	var t reflect.Type
 	var p unsafe.Pointer
 	var upstream any = tlsConn
