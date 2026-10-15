@@ -213,6 +213,20 @@ type localAddr interface {
 }
 
 func (h *ListenerHandler) NewPacket(ctx context.Context, key netip.AddrPort, buffer *buf.Buffer, metadata M.Metadata, init func(natConn network.PacketConn) network.PacketWriter) {
+	// Fast path (S-004): a datagram of an established TUN flow goes straight to
+	// its session, without Metadata, a writer, or the worker queue.
+	if h.Type == C.TUN && metadata.Destination.IsIP() {
+		if fast, ok := h.Tunnel.(C.UDPFastTunnel); ok {
+			dst := metadata.Destination.AddrPort()
+			packet := fastPacketPool.Get().(*fastPacket)
+			packet.buff, packet.dst = buffer, netip.AddrPortFrom(dst.Addr().Unmap(), dst.Port())
+			if fast.HandleUDPPacketFast(netip.AddrPortFrom(key.Addr().Unmap(), key.Port()), packet) {
+				return
+			}
+			packet.buff = nil // not taken: the buffer continues on the regular path
+			fastPacketPool.Put(packet)
+		}
+	}
 	writer := bufio.NewNetPacketWriter(init(nil))
 	mutex := sync.Mutex{}
 	cPacket := &packet{
@@ -266,6 +280,24 @@ func ShouldIgnorePacketError(err error) bool {
 	}
 	return false
 }
+
+type fastPacket struct {
+	buff *buf.Buffer
+	dst  netip.AddrPort
+}
+
+var fastPacketPool = sync.Pool{New: func() any { return new(fastPacket) }}
+
+func (p *fastPacket) Data() []byte { return p.buff.Bytes() }
+
+// Drop releases the buffer and recycles the packet; the tunnel calls it exactly once.
+func (p *fastPacket) Drop() {
+	p.buff.Release()
+	p.buff = nil
+	fastPacketPool.Put(p)
+}
+
+func (p *fastPacket) Destination() netip.AddrPort { return p.dst }
 
 type packet struct {
 	writer *network.NetPacketWriter

@@ -48,3 +48,32 @@ func benchNewPacket(b *testing.B, typ C.Type) {
 
 func BenchmarkNewPacketTUN(b *testing.B)    { benchNewPacket(b, C.TUN) }
 func BenchmarkNewPacketSOCKS5(b *testing.B) { benchNewPacket(b, C.SOCKS5) }
+
+type fastNopTunnel struct{ nopTunnel }
+
+func (fastNopTunnel) HandleUDPPacketFast(_ netip.AddrPort, p C.UDPFastPacket) bool {
+	p.Drop()
+	return true
+}
+
+// S-004: ingress of an established TUN flow through the fast path.
+func BenchmarkNewPacketTUNFast(b *testing.B) {
+	h, err := NewListenerHandler(ListenerConfig{Tunnel: fastNopTunnel{}, Type: C.TUN})
+	if err != nil {
+		b.Fatal(err)
+	}
+	src := netip.MustParseAddrPort("198.18.0.1:40000")
+	md := M.Metadata{
+		Source:      M.SocksaddrFromNetIP(src),
+		Destination: M.SocksaddrFromNetIP(netip.MustParseAddrPort("1.1.1.1:443")),
+	}
+	init := func(network.PacketConn) network.PacketWriter { return nopWriter{} }
+	ctx := context.Background()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		buffer := buf.NewSize(1200)
+		buffer.Extend(1200)
+		h.NewPacket(ctx, src, buffer, md, init)
+	}
+}

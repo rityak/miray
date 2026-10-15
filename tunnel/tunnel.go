@@ -10,11 +10,13 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	stdatomic "sync/atomic"
 	"time"
 
 	"github.com/metacubex/mihomo/common/atomic"
 	N "github.com/metacubex/mihomo/common/net"
 	"github.com/metacubex/mihomo/common/utils"
+	"github.com/metacubex/mihomo/common/xsync"
 	"github.com/metacubex/mihomo/component/loopback"
 	"github.com/metacubex/mihomo/component/nat"
 	"github.com/metacubex/mihomo/component/process"
@@ -99,8 +101,15 @@ func initUDP() {
 func (t tunnel) HandleUDPPacket(packet C.UDPPacket, metadata *C.Metadata) {
 	udpInit.Do(initUDP)
 
-	packetAdapter := C.NewPacketAdapter(packet, metadata)
+	var packetAdapter C.PacketAdapter = C.NewPacketAdapter(packet, metadata)
 	key := packetAdapter.Key()
+	var flow *flowState
+	if metadata.Type == C.TUN {
+		src := netip.AddrPortFrom(metadata.SrcIP.Unmap(), metadata.SrcPort)
+		flow, _ = udpFlows.LoadOrStoreFn(src, func() *flowState { return &flowState{src: src} })
+		flow.queued.Add(1)
+		packetAdapter = &flowPacket{PacketAdapter: packetAdapter, flow: flow}
+	}
 
 	hash := utils.MapHash(key)
 	queueNo := uint(hash) % uint(len(udpQueues))
@@ -109,6 +118,87 @@ func (t tunnel) HandleUDPPacket(packet C.UDPPacket, metadata *C.Metadata) {
 	case udpQueues[queueNo] <- packetAdapter:
 	default:
 		packet.Drop()
+		if flow != nil {
+			flow.dequeued(key)
+		}
+	}
+}
+
+// udpFlows holds fast-path state of TUN flows, keyed by flow source (T-008).
+var udpFlows xsync.Map[netip.AddrPort, *flowState]
+
+// flowState is the fast-path record of one TUN flow.
+type flowState struct {
+	src netip.AddrPort
+	// queued counts this flow's datagrams between HandleUDPPacket and
+	// sender.Send (the worker queue). The fast path is taken only at zero, so a
+	// fast datagram never overtakes an earlier regular one.
+	queued stdatomic.Int32
+	sender stdatomic.Pointer[packetSender] // set once the session is established
+}
+
+// flowPacket carries the flow state of a regular-path TUN datagram through the
+// worker queue.
+type flowPacket struct {
+	C.PacketAdapter
+	flow *flowState
+}
+
+// dequeued is called once a regular-path datagram left the worker. A flow that
+// got no session (the datagram was dropped) is forgotten.
+func (f *flowState) dequeued(key string) {
+	if f.queued.Add(-1) != 0 || f.sender.Load() != nil {
+		return
+	}
+	if _, ok := natTable.Get(key); ok {
+		return // the session is being dialed
+	}
+	f.forget()
+}
+
+// forget removes the flow from udpFlows unless a newer state replaced it or it
+// is in use again.
+func (f *flowState) forget() {
+	udpFlows.Compute(f.src, func(old *flowState, loaded bool) (*flowState, xsync.ComputeOp) {
+		if loaded && old == f && f.queued.Load() == 0 && f.sender.Load() == nil {
+			return nil, xsync.DeleteOp
+		}
+		return old, xsync.CancelOp
+	})
+}
+
+var _ C.UDPFastTunnel = Tunnel
+
+// HandleUDPPacketFast takes a datagram of an established TUN flow straight to
+// its session. It ignores the tunnel status like an established TCP relay does
+// (D-003).
+func (t tunnel) HandleUDPPacketFast(source netip.AddrPort, packet C.UDPFastPacket) bool {
+	flow, ok := udpFlows.Load(source)
+	if !ok {
+		return false
+	}
+	sender := flow.sender.Load()
+	if sender == nil || flow.queued.Load() != 0 {
+		return false
+	}
+	sender.send(packet) // nonblocking
+	return true
+}
+
+// unwrapPacketSender returns the packetSender under sniffer wrappers. It is
+// only valid after DoSniff returned: wrappers are pass-through from then on.
+func unwrapPacketSender(sender C.PacketSender) (*packetSender, bool) {
+	for {
+		if ps, ok := sender.(*packetSender); ok {
+			return ps, true
+		}
+		upstream, ok := sender.(N.WithUpstream)
+		if !ok {
+			return nil, false
+		}
+		if sender, ok = upstream.Upstream().(C.PacketSender); !ok {
+			return nil, false
+		}
 	}
 }
 
@@ -416,6 +506,11 @@ func resolveMetadata(metadata *C.Metadata) (proxy C.Proxy, rule C.Rule, err erro
 // processUDP starts a loop to handle udp packet
 func processUDP(queue chan C.PacketAdapter) {
 	for conn := range queue {
+		if fp, ok := conn.(*flowPacket); ok {
+			handleUDPConn(fp.PacketAdapter)
+			fp.flow.dequeued(fp.Key())
+			continue
+		}
 		handleUDPConn(conn)
 	}
 }
@@ -498,10 +593,22 @@ func handleUDPConn(packet C.PacketAdapter) {
 
 		go func() {
 			pc, proxy, err := dial()
+			src := netip.AddrPortFrom(metadata.SrcIP.Unmap(), metadata.SrcPort)
 			if err != nil {
 				sender.Close()
 				natTable.Delete(key)
+				if flow, ok := udpFlows.Load(src); ok && metadata.Type == C.TUN {
+					flow.forget()
+				}
 				return
+			}
+			if ps, ok := unwrapPacketSender(sender); ok && metadata.Type == C.TUN {
+				flow, _ := udpFlows.LoadOrStoreFn(src, func() *flowState { return &flowState{src: src} })
+				flow.sender.Store(ps)
+				defer func() {
+					flow.sender.Store(nil)
+					flow.forget()
+				}()
 			}
 			sender.Process(pc, proxy)
 		}()

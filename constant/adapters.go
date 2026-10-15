@@ -275,6 +275,22 @@ type UDPPacket interface {
 	LocalAddr() net.Addr
 }
 
+// UDPFastPacket is one datagram of an already established UDP flow, handed to
+// the tunnel without Metadata (S-004 fast path).
+type UDPFastPacket interface {
+	Data() []byte
+	Drop()
+	// Destination is the unmapped original destination of the datagram.
+	Destination() netip.AddrPort
+}
+
+// UDPFastTunnel is implemented by a tunnel that accepts datagrams of an
+// established flow keyed by the flow's source. It returns false when no such
+// flow exists; the caller then takes the regular HandleUDPPacket path.
+type UDPFastTunnel interface {
+	HandleUDPPacketFast(source netip.AddrPort, packet UDPFastPacket) bool
+}
+
 type UDPPacketInAddr interface {
 	InAddr() net.Addr
 }
