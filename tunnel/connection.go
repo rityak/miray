@@ -293,6 +293,9 @@ func (s *packetSender) send(packet senderItem) {
 	default:
 	}
 
+	// Two cases compile to a non-blocking send; a ctx.Done case here would cost
+	// a full runtime.selectgo per packet (T-032). A send racing with Close is
+	// caught by the check after it, and a closed sender is caught above.
 	select {
 	case s.ch <- packet:
 		// Close can finish draining before a concurrent send enqueues its packet.
@@ -301,8 +304,6 @@ func (s *packetSender) send(packet senderItem) {
 			s.dropAll()
 		default:
 		}
-	case <-s.ctx.Done():
-		packet.Drop() // sender closed when putting data to chan
 	default:
 		packet.Drop() // chan is full
 	}
