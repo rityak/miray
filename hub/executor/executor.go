@@ -275,6 +275,15 @@ func updateDNS(c *config.DNS, generalIPv6 bool) {
 	}
 
 	ipv6 := c.IPv6 && generalIPv6
+	// An unchanged dns section keeps the clients (warm connections) and the
+	// answer cache across reloads; the policies are rebuilt because they may
+	// reference rule providers.
+	key := fmt.Sprint(generalIPv6, c.RawKey)
+	var previous dns.Resolvers
+	if old, ok := resolver.DefaultResolver.(dns.Resolvers); ok && key == dnsKey {
+		previous = old
+	}
+	dnsKey = key
 	r := dns.NewResolver(dns.Config{
 		Main:                 c.NameServer,
 		Fallback:             c.Fallback,
@@ -291,14 +300,8 @@ func updateDNS(c *config.DNS, generalIPv6 bool) {
 		DirectFollowPolicy:   c.DirectFollowPolicy,
 		CacheAlgorithm:       c.CacheAlgorithm,
 		CacheMaxSize:         c.CacheMaxSize,
+		Previous:             previous,
 	})
-	// An unchanged dns section keeps the answer cache across reloads; the
-	// resolvers themselves are rebuilt because they reference proxies.
-	key := fmt.Sprint(generalIPv6, c.RawKey)
-	if old, ok := resolver.DefaultResolver.(dns.Resolvers); ok && key == dnsKey {
-		r.PatchCacheFrom(old)
-	}
-	dnsKey = key
 
 	m := dns.NewEnhancer(dns.EnhancerConfig{
 		IPv6:          ipv6,
