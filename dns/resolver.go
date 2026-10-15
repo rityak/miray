@@ -486,6 +486,11 @@ type Config struct {
 	ProxyServerPolicy    []Policy
 	CacheAlgorithm       string
 	CacheMaxSize         int
+	// Previous was built from an identical DNS configuration: its clients,
+	// with their warm DoT/DoH/DoQ/tcp connections, and answer caches are taken
+	// over, so a config reload starts neither cold nor with new handshakes
+	// (miray T-025, T-039).
+	Previous Resolvers
 }
 
 func (config Config) newCache() dnsCache {
@@ -504,6 +509,13 @@ type Resolvers struct {
 	*Resolver
 	ProxyResolver  *Resolver
 	DirectResolver *Resolver
+
+	clients []nameServerClient
+}
+
+type nameServerClient struct {
+	NameServer
+	dnsClient
 }
 
 func (rs Resolvers) ClearCache() {
@@ -512,10 +524,13 @@ func (rs Resolvers) ClearCache() {
 	rs.DirectResolver.ClearCache()
 }
 
-// PatchCacheFrom takes over the answer caches of old, built from an identical
+// patchCacheFrom takes over the answer caches of old, built from an identical
 // DNS configuration, so a config reload does not start with a cold cache
 // (miray T-025). A resolver absent on either side keeps its own cache.
-func (rs Resolvers) PatchCacheFrom(old Resolvers) {
+func (rs Resolvers) patchCacheFrom(old Resolvers) {
+	if old.Resolver == nil {
+		return
+	}
 	patch := func(r, o *Resolver) {
 		if r == nil || o == nil || o.cache == nil {
 			return
@@ -551,10 +566,12 @@ func NewResolver(config Config) (rs Resolvers) {
 		ipv6Timeout: time.Duration(config.IPv6Timeout) * time.Millisecond,
 	}
 
-	var nameServerCache []struct {
-		NameServer
-		dnsClient
+	// Previous clients resolve their server names through the previous default
+	// resolver, so it is taken over together with them.
+	if prev := config.Previous.Resolver; prev != nil && prev.defaultResolver != nil {
+		defaultResolver = prev.defaultResolver
 	}
+	nameServerCache := append([]nameServerClient(nil), config.Previous.clients...)
 	cacheTransform := func(nameserver []NameServer) (result []dnsClient) {
 	LOOP:
 		for _, ns := range nameserver {
@@ -577,10 +594,7 @@ func NewResolver(config Config) (rs Resolvers) {
 				}
 				dc = built[0]
 			}
-			nameServerCache = append(nameServerCache, struct {
-				NameServer
-				dnsClient
-			}{NameServer: ns, dnsClient: dc})
+			nameServerCache = append(nameServerCache, nameServerClient{NameServer: ns, dnsClient: dc})
 			result = append(result, dc)
 		}
 		return
@@ -654,6 +668,8 @@ func NewResolver(config Config) (rs Resolvers) {
 		r.fallbackLazyQuery = config.FallbackLazyQuery
 	}
 
+	rs.clients = nameServerCache
+	rs.patchCacheFrom(config.Previous)
 	return
 }
 
