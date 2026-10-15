@@ -44,6 +44,9 @@ import (
 
 var mux sync.Mutex
 
+// dnsKey identifies the DNS setup the current resolvers were built from (T-025).
+var dnsKey string
+
 func readConfig(path string) ([]byte, error) {
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		return nil, err
@@ -237,6 +240,7 @@ func updateNTP(c *config.NTP) {
 
 func updateDNS(c *config.DNS, generalIPv6 bool) {
 	if !c.Enable {
+		dnsKey = ""
 		resolver.DefaultResolver = nil
 		resolver.DefaultHostMapper = nil
 		resolver.DefaultService = nil
@@ -264,6 +268,14 @@ func updateDNS(c *config.DNS, generalIPv6 bool) {
 		CacheAlgorithm:       c.CacheAlgorithm,
 		CacheMaxSize:         c.CacheMaxSize,
 	})
+	// An unchanged dns section keeps the answer cache across reloads; the
+	// resolvers themselves are rebuilt because they reference proxies.
+	key := fmt.Sprint(generalIPv6, c.RawKey)
+	if old, ok := resolver.DefaultResolver.(dns.Resolvers); ok && key == dnsKey {
+		r.PatchCacheFrom(old)
+	}
+	dnsKey = key
+
 	m := dns.NewEnhancer(dns.EnhancerConfig{
 		IPv6:          ipv6,
 		EnhancedMode:  c.EnhancedMode,

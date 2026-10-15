@@ -512,6 +512,24 @@ func (rs Resolvers) ClearCache() {
 	rs.DirectResolver.ClearCache()
 }
 
+// PatchCacheFrom takes over the answer caches of old, built from an identical
+// DNS configuration, so a config reload does not start with a cold cache
+// (miray T-025). A resolver absent on either side keeps its own cache.
+func (rs Resolvers) PatchCacheFrom(old Resolvers) {
+	patch := func(r, o *Resolver) {
+		if r == nil || o == nil || o.cache == nil {
+			return
+		}
+		r.cache = o.cache
+		if r.defaultResolver != nil && o.defaultResolver != nil && o.defaultResolver.cache != nil {
+			r.defaultResolver.cache = o.defaultResolver.cache
+		}
+	}
+	patch(rs.Resolver, old.Resolver)
+	patch(rs.ProxyResolver, old.ProxyResolver)
+	patch(rs.DirectResolver, old.DirectResolver)
+}
+
 func (rs Resolvers) ResetConnection() {
 	rs.Resolver.ResetConnection()
 	rs.ProxyResolver.ResetConnection()
