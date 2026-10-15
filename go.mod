@@ -150,6 +150,6 @@ require (
 // for https://github.com/golang/protobuf/issues/1704
 replace google.golang.org/protobuf => github.com/metacubex/protobuf-go v0.0.0-20260306035419-7ceee0674686
 
-replace github.com/metacubex/mipstack => github.com/rityak/mipstack v0.0.0-20261015054837-247f17a13b54
+replace github.com/metacubex/mipstack => github.com/rityak/mipstack v0.0.0-20261015064148-05eb184984ab
 
 replace github.com/metacubex/sing-tun => github.com/rityak/sing-tun v0.0.0-20261015055440-11c18799a2c9
