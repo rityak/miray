@@ -477,6 +477,13 @@ func New(options LC.Tun, tunnel C.Tunnel, additions ...inbound.Addition) (l *Lis
 		return
 	}
 	tunIf, err := tunNew(tunOptions)
+	if err != nil && tunOptions.GSO {
+		// gso is on by default on Linux (D-002); an environment without
+		// IFF_VNET_HDR support must still get a working TUN.
+		log.Warnln("[TUN] open with gso failed, retrying without gso: %v", err)
+		tunOptions.GSO = false
+		tunIf, err = tunNew(tunOptions)
+	}
 	if err != nil {
 		err = E.Cause(err, "configure tun interface")
 		return
