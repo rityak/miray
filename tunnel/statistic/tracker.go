@@ -200,6 +200,14 @@ func (ut *udpTracker) WriteTo(b []byte, addr net.Addr) (int, error) {
 	return n, err
 }
 
+// AddUpload accounts bytes the tunnel wrote below the tracker (batched sends, S-005).
+func (ut *udpTracker) AddUpload(n int64) {
+	if ut.pushToManager {
+		ut.manager.PushUploaded(n)
+	}
+	ut.UploadTotal.Add(n)
+}
+
 func (ut *udpTracker) Close() error {
 	ut.manager.Leave(ut)
 	return ut.PacketConn.Close()
