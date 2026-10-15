@@ -89,6 +89,16 @@ func ApplyConfig(cfg *config.Config, force bool) {
 	defer mux.Unlock()
 	log.SetLevel(cfg.General.LogLevel)
 
+	// On a reload the previous configuration keeps serving while the new
+	// providers load: their files and downloads go through the running tunnel,
+	// so new connections are not dropped for the whole load (D-006). On the
+	// first start nothing is running yet and providers load in the Inner phase.
+	preload := tunnel.Status() == tunnel.Running
+	var failedProviders []P.Provider
+	if preload {
+		failedProviders = append(loadProvider(cfg.Providers), loadProvider(cfg.RuleProviders)...)
+	}
+
 	tunnel.OnSuspend()
 
 	ca.ResetCertificate()
@@ -115,14 +125,28 @@ func ApplyConfig(cfg *config.Config, force bool) {
 	tunnel.OnInnerLoading()
 
 	initInnerTcp()
-	loadProvider(cfg.Providers)
+	if !preload {
+		loadProvider(cfg.Providers)
+	}
 	updateProfile(cfg)
-	loadProvider(cfg.RuleProviders)
+	if !preload {
+		loadProvider(cfg.RuleProviders)
+	}
 	runtime.GC()
 	tunnel.OnRunning()
 	updateUpdater(cfg)
 
 	resolver.ResetConnection()
+
+	// A preload that failed through the previous configuration (for example a
+	// provider whose proxy exists only in the new one) gets one retry now.
+	for _, pv := range failedProviders {
+		go func(pv P.Provider) {
+			if err := pv.Update(); err != nil {
+				log.Warnln("[Provider] %s update after reload failed: %v", pv.Name(), err)
+			}
+		}(pv)
+	}
 }
 
 func initInnerTcp() {
@@ -327,7 +351,9 @@ func updateRules(rules []C.Rule, subRules map[string][]C.Rule, ruleProviders map
 	tunnel.UpdateRules(rules, subRules, ruleProviders)
 }
 
-func loadProvider[T P.Provider](providers map[string]T) {
+// loadProvider initializes providers concurrently and returns those that failed.
+func loadProvider[T P.Provider](providers map[string]T) (failed []P.Provider) {
+	var failedMu sync.Mutex
 	load := func(pv T) {
 		name := pv.Name()
 		if pv.VehicleType() == P.Compatible {
@@ -337,6 +363,9 @@ func loadProvider[T P.Provider](providers map[string]T) {
 		}
 
 		if err := pv.Initial(); err != nil {
+			failedMu.Lock()
+			failed = append(failed, pv)
+			failedMu.Unlock()
 			switch pv.Type() {
 			case P.Proxy:
 				{
@@ -362,6 +391,7 @@ func loadProvider[T P.Provider](providers map[string]T) {
 		}()
 	}
 	wg.Wait()
+	return failed
 }
 
 func updateSniffer(snifferConfig *sniffer.Config) {

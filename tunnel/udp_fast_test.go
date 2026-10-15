@@ -181,9 +181,10 @@ func TestUDPFlowLifecycle(t *testing.T) {
 	defer sink.Close()
 
 	proxy := &lifecycleProxy{}
-	oldProxies, oldMode, oldTimeout := proxies, mode, udpTimeout
-	proxies, mode, udpTimeout = map[string]C.Proxy{"DIRECT": proxy}, Direct, 300*time.Millisecond
-	defer func() { proxies, mode, udpTimeout = oldProxies, oldMode, oldTimeout }()
+	oldProxies, oldMode, oldTimeout := proxies, mode.Load(), udpTimeout
+	proxies, udpTimeout = map[string]C.Proxy{"DIRECT": proxy}, 300*time.Millisecond
+	mode.Store(Direct)
+	defer func() { proxies, udpTimeout = oldProxies, oldTimeout; mode.Store(oldMode) }()
 	OnRunning()
 
 	dst := sink.LocalAddr().(*net.UDPAddr).AddrPort()

@@ -57,9 +57,10 @@ func (p *handshakeProxy) DialContext(context.Context, *C.Metadata) (C.Conn, erro
 // wait once; later connections to it skip the wait (T-019).
 func TestEarlyDataWaitSkippedForServerFirst(t *testing.T) {
 	proxy := &handshakeProxy{conns: make(chan *handshakeConn, 2)}
-	oldProxies, oldMode := proxies, mode
-	proxies, mode = map[string]C.Proxy{"DIRECT": proxy}, Direct
-	defer func() { proxies, mode = oldProxies, oldMode }()
+	oldProxies, oldMode := proxies, mode.Load()
+	proxies = map[string]C.Proxy{"DIRECT": proxy}
+	mode.Store(Direct)
+	defer func() { proxies = oldProxies; mode.Store(oldMode) }()
 	OnRunning()
 
 	dst := netip.MustParseAddrPort("192.0.2.22:22")
