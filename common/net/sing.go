@@ -4,6 +4,7 @@ import (
 	"io"
 	"net"
 
+	"github.com/metacubex/mihomo/common/handicap"
 	"github.com/metacubex/mihomo/common/net/deadline"
 
 	"github.com/metacubex/sing/common"
@@ -67,6 +68,7 @@ func closeWrite(writer io.Closer) error {
 // Relay copies between left and right bidirectionally.
 // like [bufio.CopyConn] but remove unneeded [context.Context] handle and the cost of [task.Group]
 func Relay(leftConn, rightConn net.Conn) {
+	leftConn, rightConn = handicap.WrapConn(leftConn), handicap.WrapConn(rightConn)
 	defer func() {
 		_ = leftConn.Close()
 		_ = rightConn.Close()
