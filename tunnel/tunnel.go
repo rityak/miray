@@ -60,7 +60,7 @@ var (
 	udpInOnce sync.Once
 
 	// Outbound Rule
-	mode = Rule
+	mode = atomic.NewInt32Enum(Rule)
 
 	// default timeout for UDP session
 	udpTimeout = 60 * time.Second
@@ -208,14 +208,20 @@ func (t tunnel) NatTable() C.NatTable {
 }
 
 func (t tunnel) Proxies() map[string]C.Proxy {
+	configMux.RLock()
+	defer configMux.RUnlock()
 	return proxies
 }
 
 func (t tunnel) Providers() map[string]P.ProxyProvider {
+	configMux.RLock()
+	defer configMux.RUnlock()
 	return providers
 }
 
 func (t tunnel) RuleProviders() map[string]P.RuleProvider {
+	configMux.RLock()
+	defer configMux.RUnlock()
 	return ruleProviders
 }
 
@@ -240,15 +246,30 @@ func Status() TunnelStatus {
 }
 
 func SetSniffing(b bool) {
+	configMux.Lock()
 	if snifferDispatcher.Enable() {
-		configMux.Lock()
 		sniffingEnable = b
-		configMux.Unlock()
 	}
+	configMux.Unlock()
 }
 
 func IsSniffing() bool {
-	return sniffingEnable
+	_, enabled := snifferSnapshot()
+	return enabled
+}
+
+// proxiesSnapshot and snifferSnapshot read configuration that a reload
+// replaces while connections are being handled (match does the same for rules).
+func proxiesSnapshot() map[string]C.Proxy {
+	configMux.RLock()
+	defer configMux.RUnlock()
+	return proxies
+}
+
+func snifferSnapshot() (*sniffer.Dispatcher, bool) {
+	configMux.RLock()
+	defer configMux.RUnlock()
+	return snifferDispatcher, sniffingEnable
 }
 
 // TCPIn return fan-in queue
@@ -286,10 +307,14 @@ func NatTable() C.NatTable {
 
 // Rules return all rules
 func Rules() []C.Rule {
+	configMux.RLock()
+	defer configMux.RUnlock()
 	return rules
 }
 
 func Listeners() map[string]C.InboundListener {
+	configMux.RLock()
+	defer configMux.RUnlock()
 	return listeners
 }
 
@@ -304,16 +329,22 @@ func UpdateRules(newRules []C.Rule, newSubRule map[string][]C.Rule, rp map[strin
 
 // Proxies return all proxies
 func Proxies() map[string]C.Proxy {
+	configMux.RLock()
+	defer configMux.RUnlock()
 	return proxies
 }
 
 // Providers return all compatible providers
 func Providers() map[string]P.ProxyProvider {
+	configMux.RLock()
+	defer configMux.RUnlock()
 	return providers
 }
 
 // RuleProviders return all loaded rule providers
 func RuleProviders() map[string]P.RuleProvider {
+	configMux.RLock()
+	defer configMux.RUnlock()
 	return ruleProviders
 }
 
@@ -340,12 +371,12 @@ func UpdateSniffer(dispatcher *sniffer.Dispatcher) {
 
 // Mode return current mode
 func Mode() TunnelMode {
-	return mode
+	return mode.Load()
 }
 
 // SetMode change the mode of tunnel
 func SetMode(m TunnelMode) {
-	mode = m
+	mode.Store(m)
 }
 
 func FindProcessMode() process.FindProcessMode {
@@ -409,6 +440,7 @@ func preHandleMetadata(metadata *C.Metadata) error {
 }
 
 func resolveMetadata(metadata *C.Metadata) (proxy C.Proxy, rule C.Rule, err error) {
+	proxies := proxiesSnapshot()
 	if metadata.SpecialProxy != "" {
 		var exist bool
 		proxy, exist = proxies[metadata.SpecialProxy]
@@ -492,7 +524,7 @@ func resolveMetadata(metadata *C.Metadata) (proxy C.Proxy, rule C.Rule, err erro
 		helper.FindProcess = nil
 	}
 
-	switch mode {
+	switch mode.Load() {
 	case Direct:
 		proxy = proxies["DIRECT"]
 	case Global:
@@ -546,8 +578,8 @@ func handleUDPConn(packet C.PacketAdapter) {
 
 	sender, loaded := natTable.GetOrCreate(key, func() C.PacketSender {
 		sender := newPacketSender()
-		if sniffingEnable && snifferDispatcher.Enable() {
-			return snifferDispatcher.UDPSniff(packet, sender)
+		if dispatcher, enabled := snifferSnapshot(); enabled && dispatcher.Enable() {
+			return dispatcher.UDPSniff(packet, sender)
 		}
 		return sender
 	})
@@ -652,10 +684,10 @@ func handleTCPConn(connCtx C.ConnContext) {
 
 	conn := connCtx.Conn()
 	conn.ResetPeeked() // reset before sniffer
-	if sniffingEnable && snifferDispatcher.Enable() {
+	if dispatcher, enabled := snifferSnapshot(); enabled && dispatcher.Enable() {
 		// Try to sniff a domain when `preHandleMetadata` failed, this is usually
 		// caused by a "Fake DNS record missing" error when enhanced-mode is fake-ip.
-		if snifferDispatcher.TCPSniff(conn, metadata) {
+		if dispatcher.TCPSniff(conn, metadata) {
 			// we now have a domain name
 			preHandleFailed = false
 		}
@@ -775,9 +807,9 @@ func logMetadata(metadata *C.Metadata, rule C.Rule, remoteConn C.Connection) {
 		} else {
 			log.Infoln("[%s] %s --> %s match %s using %s", strings.ToUpper(metadata.NetWork.String()), metadata.SourceDetail(), metadata.RemoteAddress(), rule.RuleType().String(), remoteConn.Chains().String())
 		}
-	case mode == Global:
+	case mode.Load() == Global:
 		log.Infoln("[%s] %s --> %s using GLOBAL", strings.ToUpper(metadata.NetWork.String()), metadata.SourceDetail(), metadata.RemoteAddress())
-	case mode == Direct:
+	case mode.Load() == Direct:
 		log.Infoln("[%s] %s --> %s using DIRECT", strings.ToUpper(metadata.NetWork.String()), metadata.SourceDetail(), metadata.RemoteAddress())
 	default:
 		log.Infoln("[%s] %s --> %s doesn't match any rule using %s", strings.ToUpper(metadata.NetWork.String()), metadata.SourceDetail(), metadata.RemoteAddress(), remoteConn.Chains().String())
