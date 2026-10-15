@@ -16,16 +16,6 @@ func TestCoreBaseName(t *testing.T) {
 }
 
 func TestMirayBuildRejectsUpstreamUpdate(t *testing.T) {
-	artifactPath, err := filepath.Abs(filepath.Join("..", "..", "ai-docs", "artifacts", ".go-tmp"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(artifactPath, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	for _, name := range []string{"TMPDIR", "TMP", "TEMP"} {
-		t.Setenv(name, artifactPath)
-	}
 	directory := t.TempDir()
 	missing := filepath.Join(directory, "missing.exe")
 	previousVersion := C.Version
