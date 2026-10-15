@@ -3,6 +3,7 @@
 package tunnel
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"unsafe"
@@ -97,9 +98,11 @@ func (w *batchWriter) write(datas [][]byte, addrs []*net.UDPAddr) error {
 			continue
 		}
 		keep(w.writeMulti(datas[plain:i], addrs[plain:i]))
-		if err := w.writeGSO(datas[i:i+run], addrs[i]); err != nil {
-			w.noGSO = true // refused: send this run and everything later without GSO
+		if err := w.writeGSO(datas[i:i+run], addrs[i]); isGSOError(err) {
+			w.noGSO = true // unsupported here: send this run and everything later without GSO
 			keep(w.writeMulti(datas[i:i+run], addrs[i:i+run]))
+		} else {
+			keep(err) // a transient error drops the run, as sendmmsg would
 		}
 		i += run
 		plain = i
@@ -131,6 +134,14 @@ func (w *batchWriter) gsoRun(datas [][]byte, addrs []*net.UDPAddr) int {
 		}
 	}
 	return n
+}
+
+// isGSOError reports a refusal of UDP_SEGMENT itself: no kernel support
+// (ENOPROTOOPT, EOPNOTSUPP), a segment above the path MTU (EINVAL) or a device
+// without checksum offload (EIO, as handled by quic-go).
+func isGSOError(err error) bool {
+	return errors.Is(err, unix.EIO) || errors.Is(err, unix.EINVAL) ||
+		errors.Is(err, unix.ENOPROTOOPT) || errors.Is(err, unix.EOPNOTSUPP)
 }
 
 func (w *batchWriter) writeGSO(datas [][]byte, addr *net.UDPAddr) error {

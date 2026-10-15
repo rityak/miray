@@ -4,6 +4,7 @@ package tunnel
 
 import (
 	"net"
+	"os"
 	"testing"
 	"time"
 
@@ -11,6 +12,7 @@ import (
 	C "github.com/metacubex/mihomo/constant"
 
 	"golang.org/x/net/ipv6"
+	"golang.org/x/sys/unix"
 )
 
 // sendmmsg delivers every datagram in order, with its exact payload, and the
@@ -131,5 +133,19 @@ func TestBatchWriterGSO(t *testing.T) {
 	_ = other.SetReadDeadline(time.Now().Add(2 * time.Second))
 	if n, _, err := other.ReadFrom(buf); err != nil || n != 1 || buf[0] != 99 {
 		t.Fatalf("other destination: %v %v", buf[:n], err)
+	}
+}
+
+func TestIsGSOError(t *testing.T) {
+	for _, err := range []error{unix.EIO, unix.EINVAL, unix.ENOPROTOOPT, unix.EOPNOTSUPP,
+		&net.OpError{Op: "write", Err: os.NewSyscallError("sendmsg", unix.EIO)}} {
+		if !isGSOError(err) {
+			t.Errorf("%v: want GSO refusal", err)
+		}
+	}
+	for _, err := range []error{nil, unix.ENOBUFS, unix.ECONNREFUSED, net.ErrClosed} {
+		if isGSOError(err) {
+			t.Errorf("%v: transient error disables GSO", err)
+		}
 	}
 }
