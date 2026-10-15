@@ -23,7 +23,7 @@ const Enabled = true
 // Keep the string the same length in every arm of a comparison: the size of
 // the environment shifts the stack (Mytkowicz et al.).
 type Config struct {
-	Spin    time.Duration // busy loop per packet
+	Spin    time.Duration // busy loop per packet; accurate on Linux (2 us -> ~2.15 us), not on Windows (clock granularity)
 	Copy    bool          // memmove of the packet into a scratch buffer
 	Alloc   bool          // heap copy of the packet (GC pressure)
 	Drop    float64       // drop probability per packet
