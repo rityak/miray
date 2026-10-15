@@ -241,3 +241,10 @@ func TestTrie_Foreach(t *testing.T) {
 		assert.Nil(t, tree.Search("example.org"))
 	}
 }
+
+func TestTrie_SearchEmptyNoAlloc(t *testing.T) {
+	tree := trie.New[netip.Addr]()
+	assert.NoError(t, tree.Insert("example.com", localIP))
+	assert.Nil(t, tree.Search(""))
+	assert.Zero(t, testing.AllocsPerRun(100, func() { tree.Search("") }))
+}
