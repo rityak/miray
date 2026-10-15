@@ -14,14 +14,22 @@ import (
 	"github.com/metacubex/mihomo/log"
 )
 
+// senderItem is a queued datagram: C.PacketAdapter (regular path) or
+// C.UDPFastPacket (fast path, no Metadata).
+type senderItem interface {
+	Data() []byte
+	Drop()
+}
+
 type packetSender struct {
 	ctx    context.Context
 	cancel context.CancelFunc
-	ch     chan C.PacketAdapter
+	ch     chan senderItem
 
 	// destination NAT mapping
 	originToTarget map[string]netip.Addr
 	targetToOrigin map[netip.Addr]netip.Addr
+	fastTarget     map[netip.Addr]netip.Addr // originToTarget for IP destinations, keyed without formatting
 	mappingMutex   sync.RWMutex
 }
 
@@ -29,7 +37,7 @@ type packetSender struct {
 // It ensures that packets can be sent sequentially and without blocking
 func newPacketSender() C.PacketSender {
 	ctx, cancel := context.WithCancel(context.Background())
-	ch := make(chan C.PacketAdapter, senderCapacity)
+	ch := make(chan senderItem, senderCapacity)
 	return &packetSender{
 		ctx:    ctx,
 		cancel: cancel,
@@ -37,6 +45,7 @@ func newPacketSender() C.PacketSender {
 
 		originToTarget: make(map[string]netip.Addr),
 		targetToOrigin: make(map[netip.Addr]netip.Addr),
+		fastTarget:     make(map[netip.Addr]netip.Addr),
 	}
 }
 
@@ -48,6 +57,11 @@ func (s *packetSender) AddMapping(originMetadata *C.Metadata, metadata *C.Metada
 	targetAddr := metadata.DstIP
 	if addr := s.originToTarget[originKey]; !addr.IsValid() { // overwrite only if the record is illegal
 		s.originToTarget[originKey] = targetAddr
+	}
+	if originMetadata.Host == "" && originAddr.IsValid() {
+		if addr := s.fastTarget[originAddr]; !addr.IsValid() {
+			s.fastTarget[originAddr] = targetAddr
+		}
 	}
 	if addr := s.targetToOrigin[targetAddr]; !addr.IsValid() { // overwrite only if the record is illegal
 		s.targetToOrigin[targetAddr] = originAddr
@@ -65,8 +79,25 @@ func (s *packetSender) RestoreReadFrom(addr netip.Addr) netip.Addr {
 
 func (s *packetSender) processPacket(pc C.PacketConn, packet C.PacketAdapter) {
 	defer packet.Drop()
-	metadata := packet.Metadata()
+	s.forward(pc, packet.Metadata(), packet.Data())
+}
 
+// processFast writes a fast-path datagram; a destination not yet mapped in this
+// session takes the regular resolve path once.
+func (s *packetSender) processFast(pc C.PacketConn, packet C.UDPFastPacket) {
+	defer packet.Drop()
+	dst := packet.Destination()
+	s.mappingMutex.RLock()
+	target := s.fastTarget[dst.Addr()]
+	s.mappingMutex.RUnlock()
+	if target.IsValid() {
+		_ = handleUDPToRemote(packet.Data(), pc, net.UDPAddrFromAddrPort(netip.AddrPortFrom(target, dst.Port())))
+		return
+	}
+	s.forward(pc, &C.Metadata{NetWork: C.UDP, Type: C.TUN, DstIP: dst.Addr(), DstPort: dst.Port()}, packet.Data())
+}
+
+func (s *packetSender) forward(pc C.PacketConn, metadata *C.Metadata, data []byte) {
 	var addr *net.UDPAddr
 
 	s.mappingMutex.RLock()
@@ -99,7 +130,7 @@ func (s *packetSender) processPacket(pc C.PacketConn, packet C.PacketAdapter) {
 		s.AddMapping(originMetadata, metadata)
 		addr = metadata.UDPAddr()
 	}
-	_ = handleUDPToRemote(packet, pc, addr)
+	_ = handleUDPToRemote(data, pc, addr)
 }
 
 func (s *packetSender) Process(pc C.PacketConn, proxy C.WriteBackProxy) {
@@ -107,11 +138,16 @@ func (s *packetSender) Process(pc C.PacketConn, proxy C.WriteBackProxy) {
 		select {
 		case <-s.ctx.Done():
 			return // sender closed
-		case packet := <-s.ch:
-			if proxy != nil {
-				proxy.UpdateWriteBack(packet)
+		case item := <-s.ch:
+			switch packet := item.(type) {
+			case C.UDPFastPacket: // reply path keeps the writer of the flow's earlier packets
+				s.processFast(pc, packet)
+			case C.PacketAdapter:
+				if proxy != nil {
+					proxy.UpdateWriteBack(packet)
+				}
+				s.processPacket(pc, packet)
 			}
-			s.processPacket(pc, packet)
 		}
 	}
 }
@@ -127,7 +163,9 @@ func (s *packetSender) dropAll() {
 	}
 }
 
-func (s *packetSender) Send(packet C.PacketAdapter) {
+func (s *packetSender) Send(packet C.PacketAdapter) { s.send(packet) }
+
+func (s *packetSender) send(packet senderItem) {
 	select {
 	case <-s.ctx.Done():
 		packet.Drop() // sender closed before Send()
@@ -152,12 +190,12 @@ func (s *packetSender) Close() {
 
 func (s *packetSender) DoSniff(metadata *C.Metadata) error { return nil }
 
-func handleUDPToRemote(packet C.UDPPacket, pc C.PacketConn, addr *net.UDPAddr) error {
+func handleUDPToRemote(data []byte, pc C.PacketConn, addr *net.UDPAddr) error {
 	if addr == nil {
 		return errors.New("udp addr invalid")
 	}
 
-	_, err := pc.WriteTo(packet.Data(), addr) // a successful write extends the idle timeout, see udpActivityConn
+	_, err := pc.WriteTo(data, addr) // a successful write extends the idle timeout, see udpActivityConn
 	return err
 }
 

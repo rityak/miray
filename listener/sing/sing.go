@@ -213,6 +213,17 @@ type localAddr interface {
 }
 
 func (h *ListenerHandler) NewPacket(ctx context.Context, key netip.AddrPort, buffer *buf.Buffer, metadata M.Metadata, init func(natConn network.PacketConn) network.PacketWriter) {
+	// Fast path (S-004): a datagram of an established TUN flow goes straight to
+	// its session, without Metadata, a writer, or the worker queue.
+	if h.Type == C.TUN && metadata.Destination.IsIP() {
+		if fast, ok := h.Tunnel.(C.UDPFastTunnel); ok {
+			dst := metadata.Destination.AddrPort()
+			packet := &fastPacket{buff: buffer, dst: netip.AddrPortFrom(dst.Addr().Unmap(), dst.Port())}
+			if fast.HandleUDPPacketFast(netip.AddrPortFrom(key.Addr().Unmap(), key.Port()), packet) {
+				return
+			}
+		}
+	}
 	writer := bufio.NewNetPacketWriter(init(nil))
 	mutex := sync.Mutex{}
 	cPacket := &packet{
@@ -266,6 +277,15 @@ func ShouldIgnorePacketError(err error) bool {
 	}
 	return false
 }
+
+type fastPacket struct {
+	buff *buf.Buffer
+	dst  netip.AddrPort
+}
+
+func (p *fastPacket) Data() []byte                { return p.buff.Bytes() }
+func (p *fastPacket) Drop()                       { p.buff.Release() }
+func (p *fastPacket) Destination() netip.AddrPort { return p.dst }
 
 type packet struct {
 	writer *network.NetPacketWriter

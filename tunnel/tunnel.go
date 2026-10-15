@@ -15,6 +15,7 @@ import (
 	"github.com/metacubex/mihomo/common/atomic"
 	N "github.com/metacubex/mihomo/common/net"
 	"github.com/metacubex/mihomo/common/utils"
+	"github.com/metacubex/mihomo/common/xsync"
 	"github.com/metacubex/mihomo/component/loopback"
 	"github.com/metacubex/mihomo/component/nat"
 	"github.com/metacubex/mihomo/component/process"
@@ -110,6 +111,22 @@ func (t tunnel) HandleUDPPacket(packet C.UDPPacket, metadata *C.Metadata) {
 	default:
 		packet.Drop()
 	}
+}
+
+// udpFast indexes established TUN sessions by flow source for the fast path
+// (S-004). Only plain packetSenders are indexed: a sniffing wrapper keeps the
+// regular path.
+var udpFast xsync.Map[netip.AddrPort, *packetSender]
+
+var _ C.UDPFastTunnel = Tunnel
+
+func (t tunnel) HandleUDPPacketFast(source netip.AddrPort, packet C.UDPFastPacket) bool {
+	sender, ok := udpFast.Load(source)
+	if !ok {
+		return false
+	}
+	sender.send(packet) // nonblocking
+	return true
 }
 
 func (t tunnel) NatTable() C.NatTable {
@@ -502,6 +519,16 @@ func handleUDPConn(packet C.PacketAdapter) {
 				sender.Close()
 				natTable.Delete(key)
 				return
+			}
+			if ps, ok := sender.(*packetSender); ok && metadata.Type == C.TUN {
+				src := netip.AddrPortFrom(metadata.SrcIP.Unmap(), metadata.SrcPort)
+				udpFast.Store(src, ps)
+				defer udpFast.Compute(src, func(old *packetSender, loaded bool) (*packetSender, xsync.ComputeOp) {
+					if loaded && old == ps {
+						return nil, xsync.DeleteOp
+					}
+					return old, xsync.CancelOp // a newer session owns the key
+				})
 			}
 			sender.Process(pc, proxy)
 		}()

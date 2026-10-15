@@ -108,3 +108,41 @@ func BenchmarkSetReadDeadline(b *testing.B) {
 		_ = udp.SetReadDeadline(time.Now().Add(udpTimeout))
 	}
 }
+
+type benchFastPacket struct {
+	data []byte
+	dst  netip.AddrPort
+}
+
+func (p *benchFastPacket) Data() []byte                { return p.data }
+func (p *benchFastPacket) Drop()                       {}
+func (p *benchFastPacket) Destination() netip.AddrPort { return p.dst }
+
+// S-004: the same established session through the fast path.
+func BenchmarkUDPFastEstablished(b *testing.B) {
+	udp, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer udp.Close()
+
+	pc := &udpActivityConn{PacketConn: &benchPC{udp: udp, done: make(chan struct{}, 1)}}
+	done := pc.PacketConn.(*benchPC).done
+	src := netip.MustParseAddrPort("198.18.0.1:40000")
+	dst := netip.MustParseAddrPort("1.1.1.1:443")
+	payload := make([]byte, 1200)
+
+	sender := newPacketSender().(*packetSender)
+	defer sender.Close()
+	sender.AddMapping(benchMetadata(), benchMetadata())
+	udpFast.Store(src, sender)
+	defer udpFast.Delete(src)
+	go sender.Process(pc, nil)
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		Tunnel.HandleUDPPacketFast(src, &benchFastPacket{payload, dst})
+		<-done
+	}
+}
