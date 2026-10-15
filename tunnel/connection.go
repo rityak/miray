@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/metacubex/mihomo/common/handicap"
 	N "github.com/metacubex/mihomo/common/net"
 	C "github.com/metacubex/mihomo/constant"
 	"github.com/metacubex/mihomo/log"
@@ -259,6 +260,9 @@ func (s *packetSender) flushBatch(pc C.PacketConn, pkts []C.UDPFastPacket) {
 			s.forward(pc, &C.Metadata{NetWork: C.UDP, Type: C.TUN, DstIP: dst.Addr(), DstPort: dst.Port()}, p.Data())
 			continue
 		}
+		if handicap.Packet(p.Data()) {
+			continue
+		}
 		datas, addrs = append(datas, p.Data()), append(addrs, addr)
 	}
 	flush()
@@ -320,6 +324,9 @@ func handleUDPToRemote(data []byte, pc C.PacketConn, addr *net.UDPAddr) error {
 	if addr == nil {
 		return errors.New("udp addr invalid")
 	}
+	if handicap.Packet(data) {
+		return nil
+	}
 
 	_, err := pc.WriteTo(data, addr) // a successful write extends the idle timeout, see udpActivityConn
 	return err
@@ -376,6 +383,12 @@ func handleUDPToLocal(writeBack C.WriteBack, pc *udpActivityConn, sender C.Packe
 			return
 		}
 		lastRead = time.Now().UnixNano()
+		if handicap.Packet(data) {
+			if put != nil {
+				put()
+			}
+			continue
+		}
 
 		fromUDPAddr, isUDPAddr := from.(*net.UDPAddr)
 		if !isUDPAddr {
