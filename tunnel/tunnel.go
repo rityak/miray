@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/metacubex/mihomo/common/atomic"
+	"github.com/metacubex/mihomo/common/lru"
 	N "github.com/metacubex/mihomo/common/net"
 	"github.com/metacubex/mihomo/common/utils"
 	"github.com/metacubex/mihomo/common/xsync"
@@ -616,6 +617,16 @@ func handleUDPConn(packet C.PacketAdapter) {
 	sender.Send(packet) // nonblocking
 }
 
+// earlyDataWait is how long a new connection waits for the client's first
+// bytes, so protocols with a deferred handshake (VMess, VLESS, ...) can send
+// them together with it.
+const earlyDataWait = 200 * time.Millisecond
+
+// serverFirst remembers destinations whose clients sent nothing within
+// earlyDataWait (server-first protocols: SSH, SMTP, MySQL, ...). Later
+// connections to them skip the wait instead of adding 200ms each (T-019).
+var serverFirst = lru.New(lru.WithSize[string, struct{}](1024), lru.WithAge[string, struct{}](600))
+
 func handleTCPConn(connCtx C.ConnContext) {
 	if !isHandle(connCtx.Metadata().Type) {
 		_ = connCtx.Conn().Close()
@@ -658,13 +669,18 @@ func handleTCPConn(connCtx C.ConnContext) {
 	}
 
 	peekMutex := sync.Mutex{}
-	if !conn.Peeked() {
+	dstKey := metadata.RemoteAddress()
+	if !conn.Peeked() && !serverFirst.Exist(dstKey) {
 		peekMutex.Lock()
 		go func() {
 			defer peekMutex.Unlock()
-			_ = conn.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
-			_, _ = conn.Peek(1)
+			start := time.Now()
+			_ = conn.SetReadDeadline(start.Add(earlyDataWait))
+			_, err := conn.Peek(1)
 			_ = conn.SetReadDeadline(time.Time{})
+			if err != nil && time.Since(start) >= earlyDataWait {
+				serverFirst.Set(dstKey, struct{}{}) // the wait expired without client data
+			}
 		}()
 	}
 
