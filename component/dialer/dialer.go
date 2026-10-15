@@ -234,6 +234,12 @@ func dualStackDialContext(ctx context.Context, dialFn dialFunc, network string, 
 	}
 
 	preferIPVersion := opt.prefer
+	switch preferIPVersion {
+	case 4:
+		return staggeredDialContext(ctx, dialFn, network, ipv4s, ipv6s, port, opt)
+	case 6:
+		return staggeredDialContext(ctx, dialFn, network, ipv6s, ipv4s, port, opt)
+	}
 	fallbackTicker := time.NewTicker(dualStackFallbackTimeout)
 	defer fallbackTicker.Stop()
 
@@ -313,6 +319,68 @@ loop:
 	return nil, errors.Join(errs...)
 }
 
+// staggeredDialContext dials the preferred family first and starts the other
+// one only after dualStackFallbackTimeout or a failure of the first (RFC 8305),
+// instead of two connections for every dial. The first success wins; the
+// other attempt is canceled for a standard net.Dialer, and a late connection
+// is closed (T-011).
+func staggeredDialContext(ctx context.Context, dialFn dialFunc, network string, primary, fallback []netip.Addr, port string, opt option) (net.Conn, error) {
+	switch opt.netDialer.(type) {
+	case nil, *net.Dialer:
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithCancel(ctx)
+		defer cancel()
+	}
+	results := make(chan dialResult, 2) // buffered: an attempt never blocks after we returned
+	start := func(ips []netip.Addr, isPrimary bool) {
+		go func() {
+			result := dialResult{isPrimary: isPrimary}
+			result.Conn, result.error = dialFn(ctx, network, ips, port, opt)
+			results <- result
+		}()
+	}
+	start(primary, true)
+	timer := time.NewTimer(dualStackFallbackTimeout)
+	defer timer.Stop()
+
+	pending, fallbackStarted := 1, false
+	startFallback := func() {
+		if !fallbackStarted {
+			fallbackStarted = true
+			pending++
+			start(fallback, false)
+		}
+	}
+	var errs []error
+	for pending > 0 {
+		select {
+		case <-timer.C:
+			startFallback()
+		case res := <-results:
+			pending--
+			if res.error == nil {
+				if pending > 0 {
+					go func(n int) {
+						for i := 0; i < n; i++ {
+							if late := <-results; late.error == nil {
+								_ = late.Conn.Close()
+							}
+						}
+					}(pending)
+				}
+				return res.Conn, nil
+			}
+			if res.isPrimary {
+				errs = append([]error{fmt.Errorf("connect failed: %w", res.error)}, errs...)
+			} else {
+				errs = append(errs, fmt.Errorf("connect failed: %w", res.error))
+			}
+			startFallback()
+		}
+	}
+	return nil, errors.Join(errs...)
+}
+
 func parallelDialContext(ctx context.Context, network string, ips []netip.Addr, port string, opt option) (net.Conn, error) {
 	if len(ips) == 0 {
 		return nil, ErrorNoIpAddress
@@ -360,14 +428,34 @@ func serialDialContext(ctx context.Context, network string, ips []netip.Addr, po
 		return nil, ErrorNoIpAddress
 	}
 	var errs []error
-	for _, ip := range ips {
-		if conn, err := dialContext(ctx, network, ip, port, opt); err == nil {
+	for i, ip := range ips {
+		if conn, err := dialAttempt(ctx, network, ip, port, opt, len(ips)-i); err == nil {
 			return conn, nil
 		} else {
 			errs = append(errs, err)
 		}
 	}
 	return nil, errors.Join(errs...)
+}
+
+// dialAttempt dials one of the remaining addresses. With a deadline and more
+// addresses left, the attempt gets an equal share of the remaining budget, so a
+// blackholed first address cannot use it all (T-011). Only a standard
+// net.Dialer gets the shorter context: a custom dialer may bind the returned
+// stream to it.
+func dialAttempt(ctx context.Context, network string, ip netip.Addr, port string, opt option, remaining int) (net.Conn, error) {
+	deadline, ok := ctx.Deadline()
+	if !ok || remaining <= 1 {
+		return dialContext(ctx, network, ip, port, opt)
+	}
+	switch opt.netDialer.(type) {
+	case nil, *net.Dialer:
+	default:
+		return dialContext(ctx, network, ip, port, opt)
+	}
+	attemptCtx, cancel := context.WithDeadline(ctx, time.Now().Add(time.Until(deadline)/time.Duration(remaining)))
+	defer cancel() // an established net.Conn is not affected by its dial context
+	return dialContext(attemptCtx, network, ip, port, opt)
 }
 
 type dialResult struct {
