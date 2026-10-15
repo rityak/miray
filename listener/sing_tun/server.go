@@ -48,6 +48,7 @@ type Listener struct {
 
 	tunIf    tun.Tun
 	tunStack tun.Stack
+	cancel   context.CancelFunc
 
 	networkUpdateMonitor    tun.NetworkUpdateMonitor
 	defaultInterfaceMonitor tun.DefaultInterfaceMonitor
@@ -140,7 +141,6 @@ func New(options LC.Tun, tunnel C.Tunnel, additions ...inbound.Addition) (l *Lis
 			inbound.WithSpecialRules(""),
 		}
 	}
-	ctx := context.TODO()
 	rpTunnel := tunnel.(P.Tunnel)
 	if options.GSOMaxSize == 0 {
 		options.GSOMaxSize = 65536
@@ -317,11 +317,13 @@ func New(options LC.Tun, tunnel C.Tunnel, additions ...inbound.Addition) (l *Lis
 		Inet6Address:          options.Inet6Address,
 		DisableICMPForwarding: options.DisableICMPForwarding,
 	}
+	ctx, cancel := context.WithCancel(context.Background())
 	l = &Listener{
 		closed:  false,
 		options: options,
 		handler: handler,
 		tunName: tunName,
+		cancel:  cancel,
 	}
 	defer func() {
 		if err != nil {
@@ -514,11 +516,10 @@ func New(options LC.Tun, tunnel C.Tunnel, additions ...inbound.Addition) (l *Lis
 		return
 	}
 
-	err = tunStack.Start()
+	err = l.startStack(tunStack)
 	if err != nil {
 		return
 	}
-	l.tunStack = tunStack
 
 	if l.autoRedirect != nil {
 		if len(l.options.RouteAddressSet) > 0 && len(l.routeAddressSet) == 0 {
@@ -674,8 +675,21 @@ func parseRange[T constraints.Integer](uidRanges []ranges.Range[T], rangeList []
 	return uidRanges, nil
 }
 
+func (l *Listener) startStack(stack tun.Stack) error {
+	if err := stack.Start(); err != nil {
+		l.cancel()
+		closeFailedStack(stack)
+		return err
+	}
+	l.tunStack = stack
+	return nil
+}
+
 func (l *Listener) Close() error {
 	l.closed = true
+	if l.cancel != nil {
+		l.cancel()
+	}
 	resolver.RemoveSystemDnsBlacklist(l.dnsServerIp...)
 	if l.autoRedirectOutputMark != 0 {
 		dialer.DefaultRoutingMark.CompareAndSwap(l.autoRedirectOutputMark, 0)

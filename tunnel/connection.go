@@ -295,7 +295,12 @@ func (s *packetSender) send(packet senderItem) {
 
 	select {
 	case s.ch <- packet:
-		// put ok, so don't drop packet, will process by other side of chan
+		// Close can finish draining before a concurrent send enqueues its packet.
+		select {
+		case <-s.ctx.Done():
+			s.dropAll()
+		default:
+		}
 	case <-s.ctx.Done():
 		packet.Drop() // sender closed when putting data to chan
 	default:
@@ -353,6 +358,9 @@ func handleUDPToLocal(writeBack C.WriteBack, pc *udpActivityConn, sender C.Packe
 	for {
 		data, put, from, err := pc.WaitReadFrom()
 		if err != nil {
+			if put != nil {
+				put() // a partial read can carry a buffer together with the error
+			}
 			if isTimeout(err) {
 				// the session is idle only if neither direction was active for udpTimeout
 				last := lastRead

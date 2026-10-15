@@ -220,6 +220,9 @@ func (spc *ssrPacketConn) ReadFrom(b []byte) (int, net.Addr, error) {
 func (spc *ssrPacketConn) WaitReadFrom() (data []byte, put func(), addr net.Addr, err error) {
 	data, put, _, err = spc.EnhancePacketConn.WaitReadFrom()
 	if err != nil {
+		if put != nil {
+			put()
+		}
 		return nil, nil, nil, err
 	}
 

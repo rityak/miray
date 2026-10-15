@@ -70,4 +70,8 @@ func (c *systemClient) getDnsClients() ([]dnsClient, error) {
 	return nil, err
 }
 
-func (c *systemClient) ResetConnection() {}
+func (c *systemClient) ResetConnection() {
+	c.mu.Lock()
+	c.lastFlush = time.Time{}
+	c.mu.Unlock()
+}
