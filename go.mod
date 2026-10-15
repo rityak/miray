@@ -159,3 +159,5 @@ replace github.com/metacubex/restls-client-go => github.com/rityak/restls-client
 replace github.com/metacubex/smux => github.com/rityak/smux v0.0.0-20261015095034-a1787fab6ce4
 
 replace github.com/metacubex/utls => github.com/rityak/utls v0.0.0-20261015104218-792958f984ea
+
+replace github.com/metacubex/quic-go => github.com/rityak/quic-go v0.61.1-0.20261015121609-455bbcd179c9
