@@ -16,8 +16,8 @@ import (
 // batchTransparent lists the wrappers allowed between a session's tracker and a
 // raw UDP socket. Any other layer may transform datagrams (encryption, framing)
 // and must never be bypassed, so a batch writer exists only for DIRECT-like
-// outbounds. ponytail: type-name allowlist for the S-005 spike; production
-// needs an explicit marker interface on these wrappers.
+// outbounds. Matching by type name keeps the other packages untouched (D-001)
+// and fails safe: a renamed or new wrapper just disables batching.
 var batchTransparent = map[string]bool{
 	"*statistic.udpTracker":             true,
 	"*callback.closeCallbackPacketConn": true,
