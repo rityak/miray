@@ -276,6 +276,9 @@ func fixMetadata(metadata *C.Metadata) {
 	// first unmap dstIP
 	metadata.DstIP = metadata.DstIP.Unmap()
 	// handle IP string on host
+	if metadata.Host == "" {
+		return // ParseAddr("") allocates an error, and this runs per UDP packet
+	}
 	if ip, err := netip.ParseAddr(metadata.Host); err == nil {
 		metadata.DstIP = ip.Unmap()
 		metadata.Host = ""
@@ -431,13 +434,20 @@ func handleUDPConn(packet C.PacketAdapter) {
 	}
 	fixMetadata(metadata) // fix some metadata not set via metadata.SetRemoteAddr or metadata.SetRemoteAddress
 
+	key := packet.Key()
+	// Established session: the pre-check below only matters when creating one,
+	// and it costs a Clone plus fake-ip/hosts lookups per packet (S-001, F4).
+	if sender, ok := natTable.Get(key); ok {
+		sender.Send(packet) // nonblocking
+		return
+	}
+
 	if err := preHandleMetadata(metadata.Clone()); err != nil { // precheck without modify metadata
 		packet.Drop()
 		log.Debugln("[Metadata PreHandle] error: %s", err)
 		return
 	}
 
-	key := packet.Key()
 	sender, loaded := natTable.GetOrCreate(key, func() C.PacketSender {
 		sender := newPacketSender()
 		if sniffingEnable && snifferDispatcher.Enable() {
@@ -476,7 +486,7 @@ func handleUDPConn(packet C.PacketAdapter) {
 			}
 			logMetadata(metadata, rule, rawPc)
 
-			pc := statistic.NewUDPTracker(rawPc, statistic.DefaultManager, metadata, rule, 0, 0, true)
+			pc := &udpActivityConn{PacketConn: statistic.NewUDPTracker(rawPc, statistic.DefaultManager, metadata, rule, 0, 0, true)}
 
 			sender.AddMapping(originMetadata, dialMetadata)
 			oAddrPort := dialMetadata.AddrPort()

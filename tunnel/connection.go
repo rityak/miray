@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/netip"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	N "github.com/metacubex/mihomo/common/net"
@@ -156,16 +157,32 @@ func handleUDPToRemote(packet C.UDPPacket, pc C.PacketConn, addr *net.UDPAddr) e
 		return errors.New("udp addr invalid")
 	}
 
-	if _, err := pc.WriteTo(packet.Data(), addr); err != nil {
-		return err
-	}
-	// reset timeout
-	_ = pc.SetReadDeadline(time.Now().Add(udpTimeout))
-
-	return nil
+	_, err := pc.WriteTo(packet.Data(), addr) // a successful write extends the idle timeout, see udpActivityConn
+	return err
 }
 
-func handleUDPToLocal(writeBack C.WriteBack, pc C.PacketConn, sender C.PacketSender, key string, oAddrPort netip.AddrPort) {
+// udpActivityConn records the last successful outbound write. The reader in
+// handleUDPToLocal extends its idle deadline lazily from it, instead of both
+// directions resetting a runtime timer on every packet (S-001, F3).
+type udpActivityConn struct {
+	C.PacketConn
+	lastWrite atomic.Int64 // unix nanoseconds
+}
+
+func (c *udpActivityConn) WriteTo(b []byte, addr net.Addr) (int, error) {
+	n, err := c.PacketConn.WriteTo(b, addr)
+	if err == nil {
+		c.lastWrite.Store(time.Now().UnixNano())
+	}
+	return n, err
+}
+
+func isTimeout(err error) bool {
+	var netErr net.Error
+	return errors.As(err, &netErr) && netErr.Timeout()
+}
+
+func handleUDPToLocal(writeBack C.WriteBack, pc *udpActivityConn, sender C.PacketSender, key string, oAddrPort netip.AddrPort) {
 	defer func() {
 		sender.Close()
 		_ = pc.Close()
@@ -173,12 +190,25 @@ func handleUDPToLocal(writeBack C.WriteBack, pc C.PacketConn, sender C.PacketSen
 		natTable.Delete(key)
 	}()
 
+	lastRead := time.Now().UnixNano()
+	_ = pc.SetReadDeadline(time.Unix(0, lastRead).Add(udpTimeout))
 	for {
-		_ = pc.SetReadDeadline(time.Now().Add(udpTimeout))
 		data, put, from, err := pc.WaitReadFrom()
 		if err != nil {
+			if isTimeout(err) {
+				// the session is idle only if neither direction was active for udpTimeout
+				last := lastRead
+				if w := pc.lastWrite.Load(); w > last {
+					last = w
+				}
+				if next := time.Unix(0, last).Add(udpTimeout); next.After(time.Now()) {
+					_ = pc.SetReadDeadline(next)
+					continue
+				}
+			}
 			return
 		}
+		lastRead = time.Now().UnixNano()
 
 		fromUDPAddr, isUDPAddr := from.(*net.UDPAddr)
 		if !isUDPAddr {
