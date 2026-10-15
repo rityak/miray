@@ -29,7 +29,8 @@ type packetSender struct {
 	// destination NAT mapping
 	originToTarget map[string]netip.Addr
 	targetToOrigin map[netip.Addr]netip.Addr
-	fastTarget     map[netip.Addr]netip.Addr // originToTarget for IP destinations, keyed without formatting
+	fastTarget     map[netip.Addr]netip.Addr       // originToTarget for IP destinations, keyed without formatting
+	fastAddr       map[netip.AddrPort]*net.UDPAddr // resolved WriteTo address per original destination
 	mappingMutex   sync.RWMutex
 }
 
@@ -46,6 +47,7 @@ func newPacketSender() C.PacketSender {
 		originToTarget: make(map[string]netip.Addr),
 		targetToOrigin: make(map[netip.Addr]netip.Addr),
 		fastTarget:     make(map[netip.Addr]netip.Addr),
+		fastAddr:       make(map[netip.AddrPort]*net.UDPAddr),
 	}
 }
 
@@ -88,13 +90,36 @@ func (s *packetSender) processFast(pc C.PacketConn, packet C.UDPFastPacket) {
 	defer packet.Drop()
 	dst := packet.Destination()
 	s.mappingMutex.RLock()
-	target := s.fastTarget[dst.Addr()]
+	addr := s.fastAddr[dst]
 	s.mappingMutex.RUnlock()
-	if target.IsValid() {
-		_ = handleUDPToRemote(packet.Data(), pc, net.UDPAddrFromAddrPort(netip.AddrPortFrom(target, dst.Port())))
+	if addr == nil {
+		addr = s.fastAddrFor(dst)
+	}
+	if addr != nil {
+		_ = handleUDPToRemote(packet.Data(), pc, addr)
 		return
 	}
 	s.forward(pc, &C.Metadata{NetWork: C.UDP, Type: C.TUN, DstIP: dst.Addr(), DstPort: dst.Port()}, packet.Data())
+}
+
+// maxFastAddrs bounds the per-session WriteTo address cache.
+const maxFastAddrs = 64
+
+// fastAddrFor builds (and caches) the WriteTo address of a mapped destination,
+// so steady traffic allocates no *net.UDPAddr per datagram. It returns nil for
+// an unmapped destination.
+func (s *packetSender) fastAddrFor(dst netip.AddrPort) *net.UDPAddr {
+	s.mappingMutex.Lock()
+	defer s.mappingMutex.Unlock()
+	target := s.fastTarget[dst.Addr()]
+	if !target.IsValid() {
+		return nil
+	}
+	addr := net.UDPAddrFromAddrPort(netip.AddrPortFrom(target, dst.Port()))
+	if len(s.fastAddr) < maxFastAddrs {
+		s.fastAddr[dst] = addr // shared read-only by WriteTo calls of this session
+	}
+	return addr
 }
 
 func (s *packetSender) forward(pc C.PacketConn, metadata *C.Metadata, data []byte) {

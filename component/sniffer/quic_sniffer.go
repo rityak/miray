@@ -196,6 +196,10 @@ func (q *quicPacketSender) DoSniff(metadata *constant.Metadata) error {
 	return q.PacketSender.DoSniff(metadata)
 }
 
+// Upstream returns the wrapped sender. After DoSniff returned the wrapper only
+// forwards, so the tunnel fast path may bypass it.
+func (q *quicPacketSender) Upstream() any { return q.PacketSender }
+
 // Close stop the Process loop
 func (q *quicPacketSender) Close() {
 	q.PacketSender.Close()

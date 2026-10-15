@@ -118,7 +118,8 @@ func (p *benchFastPacket) Data() []byte                { return p.data }
 func (p *benchFastPacket) Drop()                       {}
 func (p *benchFastPacket) Destination() netip.AddrPort { return p.dst }
 
-// S-004: the same established session through the fast path.
+// S-004/T-008: the same established session through the fast path. The packet
+// object is reused (its Drop is a no-op), so allocs/op are the tunnel's own.
 func BenchmarkUDPFastEstablished(b *testing.B) {
 	udp, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
 	if err != nil {
@@ -129,20 +130,18 @@ func BenchmarkUDPFastEstablished(b *testing.B) {
 	pc := &udpActivityConn{PacketConn: &benchPC{udp: udp, done: make(chan struct{}, 1)}}
 	done := pc.PacketConn.(*benchPC).done
 	src := netip.MustParseAddrPort("198.18.0.1:40000")
-	dst := netip.MustParseAddrPort("1.1.1.1:443")
-	payload := make([]byte, 1200)
+	packet := &benchFastPacket{make([]byte, 1200), netip.MustParseAddrPort("1.1.1.1:443")}
 
 	sender := newPacketSender().(*packetSender)
 	defer sender.Close()
 	sender.AddMapping(benchMetadata(), benchMetadata())
-	udpFast.Store(src, sender)
-	defer udpFast.Delete(src)
+	registerFlow(b, src, sender)
 	go sender.Process(pc, nil)
 
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		Tunnel.HandleUDPPacketFast(src, &benchFastPacket{payload, dst})
+		Tunnel.HandleUDPPacketFast(src, packet)
 		<-done
 	}
 }

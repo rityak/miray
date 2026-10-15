@@ -218,10 +218,13 @@ func (h *ListenerHandler) NewPacket(ctx context.Context, key netip.AddrPort, buf
 	if h.Type == C.TUN && metadata.Destination.IsIP() {
 		if fast, ok := h.Tunnel.(C.UDPFastTunnel); ok {
 			dst := metadata.Destination.AddrPort()
-			packet := &fastPacket{buff: buffer, dst: netip.AddrPortFrom(dst.Addr().Unmap(), dst.Port())}
+			packet := fastPacketPool.Get().(*fastPacket)
+			packet.buff, packet.dst = buffer, netip.AddrPortFrom(dst.Addr().Unmap(), dst.Port())
 			if fast.HandleUDPPacketFast(netip.AddrPortFrom(key.Addr().Unmap(), key.Port()), packet) {
 				return
 			}
+			packet.buff = nil // not taken: the buffer continues on the regular path
+			fastPacketPool.Put(packet)
 		}
 	}
 	writer := bufio.NewNetPacketWriter(init(nil))
@@ -283,8 +286,17 @@ type fastPacket struct {
 	dst  netip.AddrPort
 }
 
-func (p *fastPacket) Data() []byte                { return p.buff.Bytes() }
-func (p *fastPacket) Drop()                       { p.buff.Release() }
+var fastPacketPool = sync.Pool{New: func() any { return new(fastPacket) }}
+
+func (p *fastPacket) Data() []byte { return p.buff.Bytes() }
+
+// Drop releases the buffer and recycles the packet; the tunnel calls it exactly once.
+func (p *fastPacket) Drop() {
+	p.buff.Release()
+	p.buff = nil
+	fastPacketPool.Put(p)
+}
+
 func (p *fastPacket) Destination() netip.AddrPort { return p.dst }
 
 type packet struct {
