@@ -13,26 +13,24 @@ var DefaultManager *Manager
 
 func init() {
 	DefaultManager = &Manager{
-		uploadTemp:    atomic.NewInt64(0),
-		downloadTemp:  atomic.NewInt64(0),
-		uploadBlip:    atomic.NewInt64(0),
-		downloadBlip:  atomic.NewInt64(0),
-		uploadTotal:   atomic.NewInt64(0),
-		downloadTotal: atomic.NewInt64(0),
-		pid:           int32(os.Getpid()),
+		pid: int32(os.Getpid()),
 	}
 
 	go DefaultManager.handle()
 }
 
 type Manager struct {
-	connections   xsync.Map[string, Tracker]
-	uploadTemp    atomic.Int64
-	downloadTemp  atomic.Int64
+	connections xsync.Map[string, Tracker]
+	// Every Read/Write of every connection adds to these two counters (T-013):
+	// one atomic per call, upload and download on separate cache lines so the
+	// two relay directions do not contend. The per-second rate is derived from
+	// them in handle.
+	uploadTotal   atomic.Int64
+	_             [56]byte
+	downloadTotal atomic.Int64
+	_             [56]byte
 	uploadBlip    atomic.Int64
 	downloadBlip  atomic.Int64
-	uploadTotal   atomic.Int64
-	downloadTotal atomic.Int64
 	pid           int32
 	memory        uint64
 }
@@ -59,12 +57,10 @@ func (m *Manager) Range(f func(c Tracker) bool) {
 }
 
 func (m *Manager) PushUploaded(size int64) {
-	m.uploadTemp.Add(size)
 	m.uploadTotal.Add(size)
 }
 
 func (m *Manager) PushDownloaded(size int64) {
-	m.downloadTemp.Add(size)
 	m.downloadTotal.Add(size)
 }
 
@@ -104,10 +100,8 @@ func (m *Manager) updateMemory() {
 }
 
 func (m *Manager) ResetStatistic() {
-	m.uploadTemp.Store(0)
 	m.uploadBlip.Store(0)
 	m.uploadTotal.Store(0)
-	m.downloadTemp.Store(0)
 	m.downloadBlip.Store(0)
 	m.downloadTotal.Store(0)
 }
@@ -115,10 +109,23 @@ func (m *Manager) ResetStatistic() {
 func (m *Manager) handle() {
 	ticker := time.NewTicker(time.Second)
 
+	var lastUp, lastDown int64
 	for range ticker.C {
-		m.uploadBlip.Store(m.uploadTemp.Swap(0))
-		m.downloadBlip.Store(m.downloadTemp.Swap(0))
+		lastUp = m.tick(&m.uploadTotal, &m.uploadBlip, lastUp)
+		lastDown = m.tick(&m.downloadTotal, &m.downloadBlip, lastDown)
 	}
+}
+
+// tick stores the bytes counted since last as the per-second rate. After a
+// ResetStatistic the total may be below last: that second reports zero.
+func (m *Manager) tick(total, blip *atomic.Int64, last int64) int64 {
+	now := total.Load()
+	if rate := now - last; rate > 0 {
+		blip.Store(rate)
+	} else {
+		blip.Store(0)
+	}
+	return now
 }
 
 type Snapshot struct {
