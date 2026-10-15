@@ -155,3 +155,5 @@ replace github.com/metacubex/mipstack => github.com/rityak/mipstack v0.0.0-20261
 replace github.com/metacubex/sing-tun => github.com/rityak/sing-tun v0.0.0-20261015075115-526266e47cf0
 
 replace github.com/metacubex/restls-client-go => github.com/rityak/restls-client-go v0.0.0-20261015085035-a573679ec5c6
+
+replace github.com/metacubex/smux => github.com/rityak/smux v0.0.0-20261015095034-a1787fab6ce4
