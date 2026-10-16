@@ -151,22 +151,23 @@ func TestInboundTrustTunnelUploadThenClose(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		conn, err := client.DialContext(context.Background(), &C.Metadata{NetWork: C.TCP, DstIP: netip.MustParseAddr("192.0.2.1"), DstPort: 443})
-		if err != nil {
-			t.Fatal(err)
-		}
-		const size = 4 << 20
-		if _, err := conn.Write(make([]byte, size)); err != nil {
-			t.Fatal(err)
-		}
-		conn.Close()
-		select {
-		case n := <-got:
-			if n != size {
-				t.Errorf("quic=%v: server got %d of %d bytes written before Close", quic, n, size)
+		for _, size := range []int64{32 << 10, 4 << 20} { // a small upload closes before the stream is under way
+			conn, err := client.DialContext(context.Background(), &C.Metadata{NetWork: C.TCP, DstIP: netip.MustParseAddr("192.0.2.1"), DstPort: 443})
+			if err != nil {
+				t.Fatal(err)
 			}
-		case <-time.After(10 * time.Second):
-			t.Errorf("quic=%v: server did not see the end of the upload", quic)
+			if _, err := conn.Write(make([]byte, size)); err != nil {
+				t.Fatal(err)
+			}
+			conn.Close()
+			select {
+			case n := <-got:
+				if n != size {
+					t.Errorf("quic=%v: server got %d of %d bytes written before Close", quic, n, size)
+				}
+			case <-time.After(10 * time.Second):
+				t.Errorf("quic=%v: server did not see the end of a %d-byte upload", quic, size)
+			}
 		}
 		client.Close()
 		server.Close()

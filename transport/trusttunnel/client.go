@@ -144,12 +144,11 @@ func (c *Client) resetHealthCheckTimer() {
 func (c *Client) roundTrip(ctx context.Context, request *http.Request, conn *httpConn) error {
 	c.startOnce.Do(c.start)
 	pipeReader, pipeWriter := io.Pipe()
-	body := &sentReader{PipeReader: pipeReader, sent: make(chan struct{})}
-	request.Body = body
+	request.Body = pipeReader
 	*conn = httpConn{
-		writer:   pipeWriter,
-		created:  make(chan struct{}),
-		bodySent: body.sent,
+		writer:      pipeWriter,
+		created:     make(chan struct{}),
+		lingerClose: true,
 	}
 	c.count.Add(1)
 	conn.closeFn = once.OnceFunc(func() {
