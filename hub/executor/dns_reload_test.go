@@ -42,7 +42,7 @@ func TestReloadKeepsDNSCacheForUnchangedSection(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		updateDNS(cfg.DNS, false)
+		updateDNS(cfg.DNS, false, "")
 	}
 	lookup := func() {
 		t.Helper()
@@ -64,5 +64,35 @@ func TestReloadKeepsDNSCacheForUnchangedSection(t *testing.T) {
 	lookup()
 	if got := queries.Load(); got != 2 {
 		t.Fatalf("queries after a changed reload = %d, want 2 (fresh cache)", got)
+	}
+}
+
+// ApplyConfig keeps the open DNS connections only when the clients were kept
+// and nothing they depend on changed: interface or routing mark, or a server
+// reached through a proxy, which the reload may have replaced (T-056).
+func TestReloadKeepsDNSConnectionsOnlyWhenSafe(t *testing.T) {
+	previous := resolver.DefaultResolver
+	t.Cleanup(func() { resolver.DefaultResolver = previous; dnsKey, dnsDialKey, dnsWarm = "", "", false })
+	apply := func(nameserver, dialKey string) bool {
+		t.Helper()
+		cfg, err := ParseWithBytes([]byte(fmt.Sprintf("dns:\n  enable: true\n  ipv6: false\n  nameserver: [%q]\n", nameserver)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		updateDNS(cfg.DNS, false, dialKey)
+		return dnsWarm
+	}
+	const plain, proxied = "tls://192.0.2.53", "tls://192.0.2.53#PROXY"
+	if apply(plain, "eth0/0") {
+		t.Fatal("first start: nothing to keep")
+	}
+	if !apply(plain, "eth0/0") {
+		t.Fatal("unchanged reload must keep the connections")
+	}
+	if apply(plain, "eth1/0") {
+		t.Fatal("a changed interface must reset the connections")
+	}
+	if apply(proxied, "eth1/0") || apply(proxied, "eth1/0") {
+		t.Fatal("a server behind a proxy must reset the connections")
 	}
 }
