@@ -283,3 +283,40 @@ func (w *batchWriter) writeMulti(datas [][]byte, addrs []*net.UDPAddr) error {
 	}
 	return firstErr
 }
+
+// replyHolder is a listener socket shared by sessions that can hold back the
+// replies written to it and send them as one batch (T-068).
+type replyHolder interface {
+	Hold()
+	Release() error
+	InitFlush(func(*net.UDPConn) func([][]byte, []*net.UDPAddr) error)
+}
+
+// replyBatch returns the batching listener socket of writeBack and how many
+// datagrams already wait on the session's outbound socket, or nil when either
+// is missing.
+func replyBatch(writeBack C.WriteBack, pc *udpActivityConn) (replyHolder, func() int) {
+	r, ok := writeBack.(interface{ ReplyConn() any })
+	if !ok {
+		return nil, nil
+	}
+	holder, ok := r.ReplyConn().(replyHolder)
+	if !ok {
+		return nil, nil
+	}
+	var cur any = pc.PacketConn
+	for i := 0; i < 16; i++ {
+		if b, ok := cur.(interface{ Buffered() int }); ok {
+			holder.InitFlush(func(udp *net.UDPConn) func([][]byte, []*net.UDPAddr) error {
+				return newRawBatchWriter(udp, func(int64) {}).write // replies were counted on the way in
+			})
+			return holder, b.Buffered
+		}
+		upstream, ok := cur.(N.WithUpstream)
+		if !ok {
+			return nil, nil
+		}
+		cur = upstream.Upstream()
+	}
+	return nil, nil
+}

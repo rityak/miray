@@ -22,3 +22,10 @@ type corker interface {
 }
 
 func newCorkWriter(C.PacketConn) (corker, *batchWriter) { return nil, nil }
+
+type replyHolder interface {
+	Hold()
+	Release() error
+}
+
+func replyBatch(C.WriteBack, *udpActivityConn) (replyHolder, func() int) { return nil, nil }

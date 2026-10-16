@@ -167,6 +167,11 @@ func New(config LC.ShadowsocksServer, lc C.InboundListenConfig, tunnel C.Tunnel,
 
 			go func() {
 				conn := bufio.NewPacketConn(ul)
+				ctx := sing.WithInAddr(context.TODO(), ul.LocalAddr())
+				if udp, ok := ul.(*net.UDPConn); ok { // replies go out in batches (T-068)
+					rc := sing.NewReplyConn(udp)
+					conn, ctx = rc, sing.WithReplyConn(ctx, rc)
+				}
 				rwOptions := network.NewReadWaitOptions(conn, sl.service)
 				// the datagrams already queued are read with one recvmmsg (T-060)
 				reader := N.NewBatchReader(ul, udpReadBatch)
@@ -177,7 +182,6 @@ func New(config LC.ShadowsocksServer, lc C.InboundListenConfig, tunnel C.Tunnel,
 						buff.Release() // nil-safe
 					}
 				}()
-				ctx := sing.WithInAddr(context.TODO(), ul.LocalAddr())
 				for {
 					for i := range buffs {
 						if buffs[i] == nil {

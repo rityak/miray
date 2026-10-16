@@ -234,6 +234,7 @@ func (h *ListenerHandler) NewPacket(ctx context.Context, key netip.AddrPort, buf
 		mutex:  &mutex,
 		rAddr:  metadata.Source.UDPAddr(),
 		buff:   buffer,
+		reply:  getReplyConn(ctx),
 	}
 	if h.Type != C.TUN { // make the handler-related SNAT key for not TUN listener
 		connID := fmt.Sprintf("%s:%s", h.handlerId, key)
@@ -305,6 +306,15 @@ type packet struct {
 	rAddr  net.Addr
 	lAddr  net.Addr
 	buff   *buf.Buffer
+	reply  *ReplyConn // nil unless the listener batches replies (T-068)
+}
+
+// ReplyConn returns the listener socket the replies of this packet go out on, if it batches.
+func (c *packet) ReplyConn() any {
+	if c.reply == nil {
+		return nil
+	}
+	return c.reply
 }
 
 func (c *packet) Data() []byte {

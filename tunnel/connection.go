@@ -435,9 +435,25 @@ func handleUDPToLocal(writeBack C.WriteBack, pc *udpActivityConn, sender C.Packe
 		natTable.Delete(key)
 	}()
 
+	// replies of datagrams already queued on pc are held on the listener socket and
+	// sent as one batch; the read below waits only once the queue is empty (T-068)
+	reply, buffered := replyBatch(writeBack, pc)
+	held := false
+	defer func() {
+		if held {
+			_ = reply.Release()
+		}
+	}()
+
 	lastRead := time.Now().UnixNano()
 	_ = pc.SetReadDeadline(time.Unix(0, lastRead).Add(udpTimeout))
 	for {
+		if held && buffered() == 0 {
+			held = false
+			// the batch carries replies of other sessions too: a refused one is
+			// dropped alone and does not end this session
+			_ = reply.Release()
+		}
 		data, put, from, err := pc.WaitReadFrom()
 		if err != nil {
 			if put != nil {
@@ -481,6 +497,10 @@ func handleUDPToLocal(writeBack C.WriteBack, pc *udpActivityConn, sender C.Packe
 
 		fromAddrPort = netip.AddrPortFrom(fromAddr, fromAddrPort.Port())
 
+		if reply != nil && !held && buffered() > 0 {
+			reply.Hold()
+			held = true
+		}
 		_, err = writeBack.WriteBack(data, net.UDPAddrFromAddrPort(fromAddrPort))
 		if put != nil {
 			put()
