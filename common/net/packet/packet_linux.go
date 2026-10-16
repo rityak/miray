@@ -66,6 +66,13 @@ func (c *enhanceUDPConn) WaitReadFrom() (data []byte, put func(), addr net.Addr,
 	return buf[:m.N], func() { _ = pool.Put(buf) }, m.Addr, nil
 }
 
+// Buffered returns how many datagrams already read wait in the queue (T-068).
+func (c *enhanceUDPConn) Buffered() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.queue)
+}
+
 // readBatch fills the queue with at least one datagram, waiting for the socket
 // to become readable without holding buffers.
 func (c *enhanceUDPConn) readBatch() error {

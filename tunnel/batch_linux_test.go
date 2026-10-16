@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/metacubex/mihomo/common/net/packet"
+	"github.com/metacubex/mihomo/component/nat"
 	C "github.com/metacubex/mihomo/constant"
 
 	"golang.org/x/net/ipv6"
@@ -303,5 +304,44 @@ func TestCorkedBatchUnderCipher(t *testing.T) {
 	}
 	if len(corker.batches) == 0 || corker.batches[0] < 2 {
 		t.Fatalf("batches %v, want the queued datagrams together", corker.batches)
+	}
+}
+
+type replyPacket struct {
+	benchPacket
+	reply any
+}
+
+func (p *replyPacket) ReplyConn() any { return p.reply }
+
+type fakeHolder struct{ flushInit bool }
+
+func (*fakeHolder) Hold()          {}
+func (*fakeHolder) Release() error { return nil }
+func (h *fakeHolder) InitFlush(func(*net.UDPConn) func([][]byte, []*net.UDPAddr) error) {
+	h.flushInit = true
+}
+
+type bufferedPC struct {
+	C.PacketConn
+	n int
+}
+
+func (b *bufferedPC) Buffered() int { return b.n }
+
+// The listener socket of a reply is found through the write-back proxy and the
+// packet adapter tunnel wraps every packet in (T-068: the adapter hid it once).
+func TestReplyBatchFound(t *testing.T) {
+	addr := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 1}
+	h := &fakeHolder{}
+	wb := nat.NewWriteBackProxy(C.NewPacketAdapter(&replyPacket{benchPacket{addr: addr}, h}, &C.Metadata{}))
+	pc := &udpActivityConn{PacketConn: &bufferedPC{n: 3}}
+	got, buffered := replyBatch(wb, pc)
+	if got != h || buffered == nil || buffered() != 3 || !h.flushInit {
+		t.Fatalf("replyBatch = %v, flush set %v", got, h.flushInit)
+	}
+	plain := nat.NewWriteBackProxy(C.NewPacketAdapter(&benchPacket{addr: addr}, &C.Metadata{}))
+	if got, _ := replyBatch(plain, pc); got != nil {
+		t.Fatalf("a listener without batching got %v", got)
 	}
 }

@@ -320,6 +320,14 @@ func (s *packetAdapter) Key() string {
 	return s.key
 }
 
+// ReplyConn passes on the batching listener socket of the packet, if any (T-068).
+func (s *packetAdapter) ReplyConn() any {
+	if r, ok := s.UDPPacket.(interface{ ReplyConn() any }); ok {
+		return r.ReplyConn()
+	}
+	return nil
+}
+
 func NewPacketAdapter(packet UDPPacket, metadata *Metadata) PacketAdapter {
 	return &packetAdapter{
 		packet,

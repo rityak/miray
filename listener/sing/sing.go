@@ -156,6 +156,7 @@ func (h *ListenerHandler) NewPacketConnection(ctx context.Context, conn network.
 	}
 
 	connID := utils.NewUUIDV4().String() // make a new SNAT key
+	reply := getReplyConn(ctx)
 
 	defer func() { _ = conn.Close() }()
 	mutex := sync.Mutex{}
@@ -198,6 +199,7 @@ func (h *ListenerHandler) NewPacketConnection(ctx context.Context, conn network.
 			rAddr:  metadata.Source.UDPAddr(),
 			lAddr:  conn.LocalAddr(),
 			buff:   buff,
+			reply:  reply,
 		}
 		cPacket.rAddr = N.NewCustomAddr(h.Type.String(), connID, cPacket.rAddr) // for tunnel's handleUDPConn
 		if lAddr := getInAddr(ctx); lAddr != nil {
@@ -234,6 +236,7 @@ func (h *ListenerHandler) NewPacket(ctx context.Context, key netip.AddrPort, buf
 		mutex:  &mutex,
 		rAddr:  metadata.Source.UDPAddr(),
 		buff:   buffer,
+		reply:  getReplyConn(ctx),
 	}
 	if h.Type != C.TUN { // make the handler-related SNAT key for not TUN listener
 		connID := fmt.Sprintf("%s:%s", h.handlerId, key)
@@ -305,6 +308,15 @@ type packet struct {
 	rAddr  net.Addr
 	lAddr  net.Addr
 	buff   *buf.Buffer
+	reply  *ReplyConn // nil unless the listener batches replies (T-068)
+}
+
+// ReplyConn returns the listener socket the replies of this packet go out on, if it batches.
+func (c *packet) ReplyConn() any {
+	if c.reply == nil {
+		return nil
+	}
+	return c.reply
 }
 
 func (c *packet) Data() []byte {
