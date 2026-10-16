@@ -47,6 +47,12 @@ var mux sync.Mutex
 // dnsKey identifies the DNS setup the current resolvers were built from (T-025).
 var dnsKey string
 
+// dnsWarm: the last updateDNS kept the previous clients and nothing their open
+// connections depend on changed, so ApplyConfig keeps those connections (T-056).
+var dnsWarm bool
+
+var dnsDialKey string
+
 func readConfig(path string) ([]byte, error) {
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		return nil, err
@@ -115,7 +121,7 @@ func ApplyConfig(cfg *config.Config, force bool) {
 	updateSniffer(cfg.Sniffer)
 	updateHosts(cfg.Hosts)
 	updateGeneral(cfg.General, true)
-	updateDNS(cfg.DNS, cfg.General.IPv6)
+	updateDNS(cfg.DNS, cfg.General.IPv6, fmt.Sprint(cfg.General.Interface, "/", cfg.General.RoutingMark))
 	updateNTP(cfg.NTP) // initialize NTP after DNS because an NTP server may be a hostname.
 	updateListeners(cfg.General, cfg.Listeners, force)
 	updateTun(cfg.General) // tun should not care "force"
@@ -136,7 +142,9 @@ func ApplyConfig(cfg *config.Config, force bool) {
 	tunnel.OnRunning()
 	updateUpdater(cfg)
 
-	resolver.ResetConnection()
+	if !dnsWarm { // a kept DNS client must not lose its warm connections here (T-039)
+		resolver.ResetConnection()
+	}
 
 	// A preload that failed through the previous configuration (for example a
 	// provider whose proxy exists only in the new one) gets one retry now.
@@ -262,7 +270,29 @@ func updateNTP(c *config.NTP) {
 	}
 }
 
-func updateDNS(c *config.DNS, generalIPv6 bool) {
+// dnsViaProxy reports a DNS server reached through a proxy or the rules: a
+// reload may change those, so its open connections must not be kept.
+func dnsViaProxy(c *config.DNS) bool {
+	lists := [][]dns.NameServer{c.NameServer, c.Fallback, c.DefaultNameserver, c.ProxyServerNameserver, c.DirectNameServer}
+	for _, policies := range [][]dns.Policy{c.NameServerPolicy, c.ProxyServerPolicy} {
+		for _, p := range policies {
+			lists = append(lists, p.NameServers)
+		}
+	}
+	for _, list := range lists {
+		for _, ns := range list {
+			if ns.ProxyName != "" || ns.ProxyAdapter != nil {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// updateDNS rebuilds the resolvers; dialKey holds the general settings that
+// outgoing connections depend on (interface, routing mark).
+func updateDNS(c *config.DNS, generalIPv6 bool, dialKey string) {
+	dnsWarm = false
 	if !c.Enable {
 		dnsKey = ""
 		resolver.DefaultResolver = nil
@@ -282,7 +312,9 @@ func updateDNS(c *config.DNS, generalIPv6 bool) {
 	var previous dns.Resolvers
 	if old, ok := resolver.DefaultResolver.(dns.Resolvers); ok && key == dnsKey {
 		previous = old
+		dnsWarm = dialKey == dnsDialKey && !dnsViaProxy(c)
 	}
+	dnsDialKey = dialKey
 	dnsKey = key
 	r := dns.NewResolver(dns.Config{
 		Main:                 c.NameServer,
