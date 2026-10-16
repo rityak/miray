@@ -6,6 +6,8 @@ import (
 	"net"
 	"sync"
 
+	"github.com/metacubex/mihomo/common/net/packet"
+
 	"golang.org/x/sys/unix"
 )
 
@@ -43,7 +45,7 @@ func connectUDP(pc net.PacketConn, addr net.Addr) net.PacketConn {
 	if err := rc.Control(func(fd uintptr) { connectErr = unix.Connect(int(fd), sa) }); err != nil || connectErr != nil {
 		return pc
 	}
-	return &connectedUDPConn{UDPConn: udp}
+	return &connectedUDPConn{UDPConn: udp, reader: packet.NewEnhancePacketConn(udp)}
 }
 
 // connectedUDPConn sends every datagram to the connected server. While corked
@@ -51,6 +53,7 @@ func connectUDP(pc net.PacketConn, addr net.Addr) net.PacketConn {
 // sends them together with one sendmmsg or GSO write.
 type connectedUDPConn struct {
 	*net.UDPConn
+	reader packet.EnhancePacketConn // replies already queued are read with one recvmmsg (T-075)
 	mu     sync.Mutex
 	corked bool
 	queue  [][]byte // reused across batches
@@ -71,6 +74,8 @@ func (c *connectedUDPConn) WriteTo(b []byte, _ net.Addr) (int, error) {
 	c.mu.Unlock()
 	return c.UDPConn.Write(b)
 }
+
+func (c *connectedUDPConn) ReadFrom(p []byte) (int, net.Addr, error) { return c.reader.ReadFrom(p) }
 
 // Cork starts collecting the datagrams written.
 func (c *connectedUDPConn) Cork() {
