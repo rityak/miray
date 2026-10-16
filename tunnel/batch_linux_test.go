@@ -136,6 +136,46 @@ func TestBatchWriterGSO(t *testing.T) {
 	}
 }
 
+// A datagram the kernel refuses (here port 0: EINVAL) costs only itself, as a
+// sendto per datagram would: the ones after it in the batch still go out. A
+// failed sendmmsg reports n = -1 through x/net, which must not reach a slice.
+func TestBatchWriterSkipsFailedDatagram(t *testing.T) {
+	sink, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sink.Close()
+	conn, err := net.ListenUDP("udp", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	var counted int64
+	w := &batchWriter{v6: ipv6.NewPacketConn(conn), udp: conn, msgs: make([]ipv6.Message, maxBatch), count: func(n int64) { counted += n }}
+	for i := range w.msgs {
+		w.msgs[i].Buffers = make([][]byte, 1)
+	}
+	dst := sink.LocalAddr().(*net.UDPAddr)
+	bad := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0}
+	datas := [][]byte{{0}, {1, 1}, {2}, {3, 3, 3}}
+	addrs := []*net.UDPAddr{bad, dst, bad, dst}
+	if err := w.write(datas, addrs); err == nil {
+		t.Fatal("refused datagrams reported no error")
+	}
+	if counted != 5 {
+		t.Fatalf("counted %d bytes, want 5 (the two delivered datagrams)", counted)
+	}
+	buf := make([]byte, 16)
+	_ = sink.SetReadDeadline(time.Now().Add(2 * time.Second))
+	for _, want := range []int{2, 3} {
+		n, _, err := sink.ReadFrom(buf)
+		if err != nil || n != want {
+			t.Fatalf("got %v %v, want a %d-byte datagram", buf[:n], err, want)
+		}
+	}
+}
+
 func TestIsGSOError(t *testing.T) {
 	for _, err := range []error{unix.EIO, unix.EINVAL, unix.ENOPROTOOPT, unix.EOPNOTSUPP,
 		&net.OpError{Op: "write", Err: os.NewSyscallError("sendmsg", unix.EIO)}} {
