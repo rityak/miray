@@ -40,6 +40,13 @@ type packetSender struct {
 	batchPkts  []C.UDPFastPacket
 	batchData  [][]byte
 	batchAddrs []*net.UDPAddr
+
+	// batched sends under an encrypting outbound (T-059)
+	corkInit  bool
+	cork      corker
+	corkW     *batchWriter
+	corkItems []senderItem
+	corkAddrs []*net.UDPAddr // all nil: the socket is connected
 }
 
 // maxBatch bounds one opportunistic drain of already queued datagrams.
@@ -195,9 +202,62 @@ func (s *packetSender) Process(pc C.PacketConn, proxy C.WriteBackProxy) {
 }
 
 func (s *packetSender) processItem(pc C.PacketConn, proxy C.WriteBackProxy, item senderItem) {
+	if !s.corkInit {
+		s.corkInit = true
+		s.cork, s.corkW = newCorkWriter(pc)
+	}
+	if s.corkW != nil {
+		s.processCorked(pc, proxy, item)
+		return
+	}
 	switch packet := item.(type) {
 	case C.UDPFastPacket: // reply path keeps the writer of the flow's earlier packets
 		s.processFastBatch(pc, proxy, packet)
+	case C.PacketAdapter:
+		if proxy != nil {
+			proxy.UpdateWriteBack(packet)
+		}
+		s.processPacket(pc, packet)
+	}
+}
+
+// processCorked takes the datagrams already queued behind first, without
+// waiting for more, encrypts each on its way down and sends them all with one
+// sendmmsg or GSO write (T-059). A sparse datagram is sent alone and at once.
+func (s *packetSender) processCorked(pc C.PacketConn, proxy C.WriteBackProxy, first senderItem) {
+	items := append(s.corkItems[:0], first)
+drain:
+	for len(items) < maxBatch {
+		select {
+		case item := <-s.ch:
+			items = append(items, item)
+		default:
+			break drain
+		}
+	}
+	if len(items) == 1 {
+		s.processOne(pc, proxy, first)
+	} else {
+		s.cork.Cork()
+		for _, item := range items {
+			s.processOne(pc, proxy, item)
+		}
+		datas := s.cork.Uncork()
+		for len(s.corkAddrs) < len(datas) {
+			s.corkAddrs = append(s.corkAddrs, nil)
+		}
+		_ = s.corkW.write(datas, s.corkAddrs[:len(datas)])
+	}
+	for i := range items {
+		items[i] = nil // the packets are recycled after Drop
+	}
+	s.corkItems = items[:0]
+}
+
+func (s *packetSender) processOne(pc C.PacketConn, proxy C.WriteBackProxy, item senderItem) {
+	switch packet := item.(type) {
+	case C.UDPFastPacket:
+		s.processFast(pc, packet)
 	case C.PacketAdapter:
 		if proxy != nil {
 			proxy.UpdateWriteBack(packet)

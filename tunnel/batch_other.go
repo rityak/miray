@@ -15,3 +15,10 @@ func newBatchWriter(C.PacketConn) *batchWriter { return nil }
 func (*batchWriter) write([][]byte, []*net.UDPAddr) error { return nil }
 
 func trackActivity(*batchWriter, *udpActivityConn) {}
+
+type corker interface {
+	Cork()
+	Uncork() [][]byte
+}
+
+func newCorkWriter(C.PacketConn) (corker, *batchWriter) { return nil, nil }

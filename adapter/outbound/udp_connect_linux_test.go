@@ -49,3 +49,42 @@ func TestConnectUDP(t *testing.T) {
 		_ = stranger.Close()
 	}
 }
+
+// While corked, writes are kept as copies and nothing is sent (T-059).
+func TestConnectedUDPCork(t *testing.T) {
+	server, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer server.Close()
+	raw, err := net.ListenUDP("udp", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := connectUDP(raw, server.LocalAddr()).(*connectedUDPConn)
+	defer c.Close()
+	b := []byte{1, 2, 3}
+	c.Cork()
+	for i := 0; i < 3; i++ {
+		b[0] = byte(i)
+		if n, err := c.WriteTo(b, nil); n != 3 || err != nil {
+			t.Fatal(n, err)
+		}
+	}
+	got := c.Uncork()
+	if len(got) != 3 || got[0][0] != 0 || got[2][0] != 2 {
+		t.Fatalf("collected %v", got)
+	}
+	_ = server.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+	if _, _, err := server.ReadFrom(make([]byte, 16)); err == nil {
+		t.Fatal("a corked write was sent")
+	}
+	if _, err := c.WriteTo([]byte{7}, nil); err != nil { // uncorked: sent at once
+		t.Fatal(err)
+	}
+	_ = server.SetReadDeadline(time.Now().Add(time.Second))
+	buf := make([]byte, 16)
+	if n, _, err := server.ReadFrom(buf); err != nil || n != 1 || buf[0] != 7 {
+		t.Fatalf("uncorked write: %v %v", buf[:n], err)
+	}
+}

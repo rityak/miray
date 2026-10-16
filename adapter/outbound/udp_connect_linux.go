@@ -4,6 +4,7 @@ package outbound
 
 import (
 	"net"
+	"sync"
 
 	"golang.org/x/sys/unix"
 )
@@ -45,9 +46,46 @@ func connectUDP(pc net.PacketConn, addr net.Addr) net.PacketConn {
 	return &connectedUDPConn{UDPConn: udp}
 }
 
-// connectedUDPConn sends every datagram to the connected server.
+// connectedUDPConn sends every datagram to the connected server. While corked
+// (T-059) it keeps copies of the datagrams instead, and the session's sender
+// sends them together with one sendmmsg or GSO write.
 type connectedUDPConn struct {
 	*net.UDPConn
+	mu     sync.Mutex
+	corked bool
+	queue  [][]byte // reused across batches
+	n      int
 }
 
-func (c *connectedUDPConn) WriteTo(b []byte, _ net.Addr) (int, error) { return c.UDPConn.Write(b) }
+func (c *connectedUDPConn) WriteTo(b []byte, _ net.Addr) (int, error) {
+	c.mu.Lock()
+	if c.corked {
+		if c.n == len(c.queue) {
+			c.queue = append(c.queue, nil)
+		}
+		c.queue[c.n] = append(c.queue[c.n][:0], b...)
+		c.n++
+		c.mu.Unlock()
+		return len(b), nil
+	}
+	c.mu.Unlock()
+	return c.UDPConn.Write(b)
+}
+
+// Cork starts collecting the datagrams written.
+func (c *connectedUDPConn) Cork() {
+	c.mu.Lock()
+	c.corked, c.n = true, 0
+	c.mu.Unlock()
+}
+
+// Uncork stops collecting and returns the datagrams collected, valid until the
+// next Cork; the caller sends them on RawUDP.
+func (c *connectedUDPConn) Uncork() [][]byte {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.corked = false
+	return c.queue[:c.n]
+}
+
+func (c *connectedUDPConn) RawUDP() *net.UDPConn { return c.UDPConn }

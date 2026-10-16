@@ -69,16 +69,7 @@ func newBatchWriter(pc C.PacketConn) *batchWriter {
 			if count == nil {
 				return nil
 			}
-			w := &batchWriter{count: count, msgs: make([]ipv4.Message, maxBatch), udp: udp}
-			for i := range w.msgs {
-				w.msgs[i].Buffers = make([][]byte, 1)
-			}
-			if la, ok := udp.LocalAddr().(*net.UDPAddr); ok && la.IP.To4() != nil {
-				w.v4 = ipv4.NewPacketConn(udp)
-			} else {
-				w.v6 = ipv6.NewPacketConn(udp) // dual-stack: Linux accepts AF_INET destinations
-			}
-			return w
+			return newRawBatchWriter(udp, count)
 		}
 		if !batchTransparent[fmt.Sprintf("%T", cur)] {
 			return nil
@@ -92,6 +83,47 @@ func newBatchWriter(pc C.PacketConn) *batchWriter {
 		}
 		cur = upstream.Upstream()
 	}
+}
+
+func newRawBatchWriter(udp *net.UDPConn, count func(int64)) *batchWriter {
+	w := &batchWriter{count: count, msgs: make([]ipv4.Message, maxBatch), udp: udp}
+	for i := range w.msgs {
+		w.msgs[i].Buffers = make([][]byte, 1)
+	}
+	if la, ok := udp.LocalAddr().(*net.UDPAddr); ok && la.IP.To4() != nil {
+		w.v4 = ipv4.NewPacketConn(udp)
+	} else {
+		w.v6 = ipv6.NewPacketConn(udp) // dual-stack: Linux accepts AF_INET destinations
+	}
+	return w
+}
+
+// corker is a connected socket under an encrypting outbound (ss, T-061) that
+// can collect the datagrams of a batch instead of sending each (T-059).
+type corker interface {
+	Cork()
+	Uncork() [][]byte
+	RawUDP() *net.UDPConn
+}
+
+// newCorkWriter finds a corker under any wrappers of pc and a batch writer for
+// its socket. Datagrams were counted by the tracker on their way down.
+func newCorkWriter(pc C.PacketConn) (corker, *batchWriter) {
+	var cur any = pc
+	if ac, ok := cur.(*udpActivityConn); ok {
+		cur = ac.PacketConn
+	}
+	for i := 0; i < 16; i++ {
+		if c, ok := cur.(corker); ok {
+			return c, newRawBatchWriter(c.RawUDP(), func(int64) {})
+		}
+		upstream, ok := cur.(N.WithUpstream)
+		if !ok {
+			return nil, nil
+		}
+		cur = upstream.Upstream()
+	}
+	return nil, nil
 }
 
 // write sends datas in order: runs eligible for GSO as one segmented send each,
@@ -171,11 +203,34 @@ func (w *batchWriter) writeGSO(datas [][]byte, addr *net.UDPAddr) error {
 		h.SetLen(unix.CmsgLen(2))
 	}
 	*(*uint16)(unsafe.Pointer(&w.gsoOOB[unix.CmsgLen(0)])) = uint16(len(datas[0]))
+	if addr == nil {
+		// a socket connected under Go (T-061): WriteMsgUDP refuses a nil address
+		return w.sendmsgConnected(buf)
+	}
 	n, _, err := w.udp.WriteMsgUDP(buf, w.gsoOOB, addr)
 	if err != nil {
 		return err
 	}
 	w.count(int64(n))
+	return nil
+}
+
+func (w *batchWriter) sendmsgConnected(buf []byte) error {
+	rc, err := w.udp.SyscallConn()
+	if err != nil {
+		return err
+	}
+	var serr error
+	if err := rc.Write(func(fd uintptr) bool {
+		serr = unix.Sendmsg(int(fd), buf, w.gsoOOB, nil, 0)
+		return serr != unix.EAGAIN
+	}); err != nil {
+		return err
+	}
+	if serr != nil {
+		return serr
+	}
+	w.count(int64(len(buf)))
 	return nil
 }
 
@@ -186,7 +241,10 @@ func (w *batchWriter) writeMulti(datas [][]byte, addrs []*net.UDPAddr) error {
 	ms := w.msgs[:len(datas)]
 	for i := range ms {
 		ms[i].Buffers[0] = datas[i]
-		ms[i].Addr = addrs[i]
+		ms[i].Addr = nil // a typed nil *net.UDPAddr would be a non-nil net.Addr
+		if addrs[i] != nil {
+			ms[i].Addr = addrs[i]
+		}
 		ms[i].N = 0
 	}
 	var firstErr error

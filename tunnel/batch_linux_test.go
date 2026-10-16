@@ -4,6 +4,7 @@ package tunnel
 
 import (
 	"net"
+	"net/netip"
 	"os"
 	"testing"
 	"time"
@@ -215,5 +216,92 @@ func TestIsGSOError(t *testing.T) {
 		if isGSOError(err) {
 			t.Errorf("%v: transient error disables GSO", err)
 		}
+	}
+}
+
+// testCorker is a connected socket that collects while corked, like the ss
+// session socket (outbound.connectedUDPConn).
+type testCorker struct {
+	C.PacketConn
+	udp     *net.UDPConn
+	corked  bool
+	queue   [][]byte
+	batches []int
+}
+
+func (c *testCorker) WriteTo(b []byte, _ net.Addr) (int, error) {
+	if c.corked {
+		c.queue = append(c.queue, append([]byte(nil), b...))
+		return len(b), nil
+	}
+	return c.udp.Write(b)
+}
+func (c *testCorker) Cork() { c.corked, c.queue = true, c.queue[:0] }
+func (c *testCorker) Uncork() [][]byte {
+	c.corked = false
+	c.batches = append(c.batches, len(c.queue))
+	return c.queue
+}
+func (c *testCorker) RawUDP() *net.UDPConn { return c.udp }
+
+// testCipher stands for an encrypting outbound above the socket.
+type testCipher struct {
+	C.PacketConn
+	inner *testCorker
+}
+
+func (c *testCipher) WriteTo(b []byte, addr net.Addr) (int, error) {
+	return c.inner.WriteTo(append([]byte{0xEE}, b...), addr)
+}
+func (c *testCipher) Upstream() any { return c.inner }
+
+// Datagrams queued on a session whose outbound encrypts above a connected
+// socket go out in order, the queued ones as one batch (T-059).
+func TestCorkedBatchUnderCipher(t *testing.T) {
+	sink, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sink.Close()
+	// connected the way outbound.connectUDP does it: a dual-stack socket from
+	// ListenUDP, connected with a raw connect, which Go does not know about
+	udp, err := net.ListenUDP("udp", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer udp.Close()
+	sa := &unix.SockaddrInet6{Port: sink.LocalAddr().(*net.UDPAddr).Port}
+	copy(sa.Addr[:], net.IPv4(127, 0, 0, 1).To16())
+	rc, _ := udp.SyscallConn()
+	var cerr error
+	if err := rc.Control(func(fd uintptr) { cerr = unix.Connect(int(fd), sa) }); err != nil || cerr != nil {
+		t.Fatal(err, cerr)
+	}
+	corker := &testCorker{udp: udp}
+	pc := &udpActivityConn{PacketConn: &testCipher{inner: corker}}
+
+	s := newPacketSender().(*packetSender)
+	defer s.Close()
+	src := &net.UDPAddr{IP: net.IPv4(198, 18, 0, 59), Port: 40059}
+	md := &C.Metadata{NetWork: C.UDP, Type: C.SOCKS5, DstIP: netip.MustParseAddr("192.0.2.59"), DstPort: 443}
+	s.AddMapping(md, md)
+	const count = 20
+	for i := 0; i < count; i++ { // queued before the sender runs
+		m := *md
+		payload := append([]byte{byte(i)}, make([]byte, i%3)...) // sizes 2,3,4,...: GSO runs and sendmmsg
+		s.Send(C.NewPacketAdapter(&benchPacket{payload, src}, &m))
+	}
+	go s.Process(pc, nil)
+
+	buf := make([]byte, 16)
+	_ = sink.SetReadDeadline(time.Now().Add(2 * time.Second))
+	for i := 0; i < count; i++ {
+		n, _, err := sink.ReadFrom(buf)
+		if err != nil || n != 2+i%3 || buf[0] != 0xEE || buf[1] != byte(i) {
+			t.Fatalf("datagram %d: %v %v", i, buf[:n], err)
+		}
+	}
+	if len(corker.batches) == 0 || corker.batches[0] < 2 {
+		t.Fatalf("batches %v, want the queued datagrams together", corker.batches)
 	}
 }
