@@ -195,3 +195,28 @@ func TestUDPEstablishedSurvivesReload(t *testing.T) {
 		t.Fatal("a new session was created during reload")
 	}
 }
+
+// A new TCP connection arriving during a reload waits for it instead of being
+// closed (T-067).
+func TestNewConnWaitsForReload(t *testing.T) {
+	OnRunning()
+	defer OnRunning()
+	OnSuspend()
+	got := make(chan bool, 1)
+	go func() { got <- waitHandle(C.SOCKS5) }()
+	select {
+	case <-got:
+		t.Fatal("did not wait for the reload")
+	case <-time.After(50 * time.Millisecond):
+	}
+	OnInnerLoading()
+	OnRunning()
+	select {
+	case ok := <-got:
+		if !ok {
+			t.Fatal("refused after the reload")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("still waiting after the reload")
+	}
+}
