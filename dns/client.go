@@ -60,11 +60,14 @@ func (c *client) ExchangeContext(ctx context.Context, m *D.Msg) (*D.Msg, error) 
 }
 
 // exchange owns conn: it is returned to the idle pool after a successful tcp
-// exchange and closed otherwise.
+// exchange and closed otherwise. Only this goroutine pools it, after the
+// result arrived: a cancel racing with the end of the exchange closes conn,
+// and a closed conn must not reach the pool.
 func (c *client) exchange(ctx context.Context, conn net.Conn, network, addr string, m *D.Msg) (*D.Msg, error) {
 	type result struct {
-		msg *D.Msg
-		err error
+		msg   *D.Msg
+		err   error
+		reuse bool
 	}
 	ch := make(chan result, 1)
 	go func() {
@@ -78,9 +81,8 @@ func (c *client) exchange(ctx context.Context, conn net.Conn, network, addr stri
 		}
 
 		msg, _, err := dClient.ExchangeWithConn(m, dConn)
-		if err == nil && network == "tcp" {
-			c.putIdle(conn)
-		} else {
+		reuse := err == nil && network == "tcp"
+		if !reuse {
 			_ = conn.Close()
 		}
 
@@ -89,7 +91,7 @@ func (c *client) exchange(ctx context.Context, conn net.Conn, network, addr stri
 			var tcpConn net.Conn
 			tcpConn, err = c.dialer.DialContext(ctx, "tcp", addr)
 			if err != nil {
-				ch <- result{msg, err}
+				ch <- result{msg, err, false}
 				return
 			}
 			defer tcpConn.Close()
@@ -97,14 +99,17 @@ func (c *client) exchange(ctx context.Context, conn net.Conn, network, addr stri
 			msg, _, err = dClient.ExchangeWithConn(m, dConn)
 		}
 
-		ch <- result{msg, err}
+		ch <- result{msg, err, reuse}
 	}()
 
 	select {
 	case <-ctx.Done():
-		_ = conn.Close() // abort the exchange; a closed conn never reaches the pool
+		_ = conn.Close() // abort the exchange
 		return nil, ctx.Err()
 	case ret := <-ch:
+		if ret.reuse {
+			c.putIdle(conn)
+		}
 		return ret.msg, ret.err
 	}
 }
