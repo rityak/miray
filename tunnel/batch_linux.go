@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"time"
 	"unsafe"
 
 	N "github.com/metacubex/mihomo/common/net"
@@ -47,6 +48,18 @@ const (
 	maxGSOSegments = 64    // UDP_MAX_SEGMENTS on older kernels
 	maxGSOBytes    = 65000 // below the 64 KiB UDP datagram limit
 )
+
+// trackActivity makes the sends of a batch writer extend the idle timeout, by
+// the bytes that went out: a batch with one refused datagram still counts.
+func trackActivity(w *batchWriter, ac *udpActivityConn) {
+	upload := w.count
+	w.count = func(n int64) {
+		upload(n)
+		if n > 0 {
+			ac.lastWrite.Store(time.Now().UnixNano())
+		}
+	}
+}
 
 func newBatchWriter(pc C.PacketConn) *batchWriter {
 	var count func(int64)
