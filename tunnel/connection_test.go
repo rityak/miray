@@ -126,3 +126,31 @@ func TestHandleUDPToLocalReleasesBufferOnReadError(t *testing.T) {
 		}
 	}
 }
+
+type addrRecordingPacketConn struct {
+	C.PacketConn
+	to net.Addr
+}
+
+func (pc *addrRecordingPacketConn) WriteTo(b []byte, addr net.Addr) (int, error) {
+	pc.to = addr
+	return len(b), nil
+}
+
+// A datagram of an established session to an IP goes to the mapped target
+// without allocating (T-062).
+func TestForwardMappedIPWithoutAllocs(t *testing.T) {
+	s := newPacketSender().(*packetSender)
+	defer s.Close()
+	origin := &C.Metadata{NetWork: C.UDP, DstIP: netip.MustParseAddr("198.18.0.7"), DstPort: 443}
+	s.AddMapping(origin, &C.Metadata{NetWork: C.UDP, DstIP: netip.MustParseAddr("192.0.2.9"), DstPort: 443})
+	pc := &addrRecordingPacketConn{}
+	data := make([]byte, 100)
+	s.forward(pc, origin, data)
+	if pc.to == nil || pc.to.String() != "192.0.2.9:443" {
+		t.Fatalf("sent to %v, want the mapped target", pc.to)
+	}
+	if n := testing.AllocsPerRun(100, func() { s.forward(pc, origin, data) }); n != 0 {
+		t.Fatalf("%v allocs per datagram, want 0", n)
+	}
+}

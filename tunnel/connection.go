@@ -100,17 +100,23 @@ func (s *packetSender) processPacket(pc C.PacketConn, packet C.PacketAdapter) {
 func (s *packetSender) processFast(pc C.PacketConn, packet C.UDPFastPacket) {
 	defer packet.Drop()
 	dst := packet.Destination()
+	if addr := s.cachedAddr(dst); addr != nil {
+		_ = handleUDPToRemote(packet.Data(), pc, addr)
+		return
+	}
+	s.forward(pc, &C.Metadata{NetWork: C.UDP, Type: C.TUN, DstIP: dst.Addr(), DstPort: dst.Port()}, packet.Data())
+}
+
+// cachedAddr returns the WriteTo address of a mapped IP destination, nil for
+// an unmapped one.
+func (s *packetSender) cachedAddr(dst netip.AddrPort) *net.UDPAddr {
 	s.mappingMutex.RLock()
 	addr := s.fastAddr[dst]
 	s.mappingMutex.RUnlock()
 	if addr == nil {
 		addr = s.fastAddrFor(dst)
 	}
-	if addr != nil {
-		_ = handleUDPToRemote(packet.Data(), pc, addr)
-		return
-	}
-	s.forward(pc, &C.Metadata{NetWork: C.UDP, Type: C.TUN, DstIP: dst.Addr(), DstPort: dst.Port()}, packet.Data())
+	return addr
 }
 
 // maxFastAddrs bounds the per-session WriteTo address cache.
@@ -135,13 +141,15 @@ func (s *packetSender) fastAddrFor(dst netip.AddrPort) *net.UDPAddr {
 
 func (s *packetSender) forward(pc C.PacketConn, metadata *C.Metadata, data []byte) {
 	var addr *net.UDPAddr
-
-	s.mappingMutex.RLock()
-	targetAddr := s.originToTarget[metadata.String()]
-	s.mappingMutex.RUnlock()
-
-	if targetAddr.IsValid() {
-		addr = net.UDPAddrFromAddrPort(netip.AddrPortFrom(targetAddr, metadata.DstPort))
+	if metadata.Host == "" {
+		addr = s.cachedAddr(metadata.AddrPort()) // no formatting or new address per datagram (T-062)
+	} else {
+		s.mappingMutex.RLock()
+		targetAddr := s.originToTarget[metadata.Host]
+		s.mappingMutex.RUnlock()
+		if targetAddr.IsValid() {
+			addr = net.UDPAddrFromAddrPort(netip.AddrPortFrom(targetAddr, metadata.DstPort))
+		}
 	}
 
 	if addr == nil {
