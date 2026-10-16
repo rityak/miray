@@ -6,10 +6,14 @@ import (
 	"net"
 
 	"github.com/metacubex/mihomo/adapter/inbound"
+	N "github.com/metacubex/mihomo/common/net"
 	"github.com/metacubex/mihomo/common/pool"
 	C "github.com/metacubex/mihomo/constant"
 	"github.com/metacubex/mihomo/transport/socks5"
 )
+
+// udpReadBatch bounds the datagrams taken per recvmmsg (T-060).
+const udpReadBatch = 16
 
 type PacketConn struct {
 	conn   net.PacketConn
@@ -57,17 +61,33 @@ func NewUDP(addr, target, proxy string, lc C.InboundListenConfig, tunnel C.Tunne
 	}
 
 	go func() {
+		// the datagrams already queued are read with one recvmmsg (T-060)
+		reader := N.NewBatchReader(l, udpReadBatch)
+		bufs := make([][]byte, udpReadBatch)
+		defer func() {
+			for _, buf := range bufs {
+				if buf != nil {
+					pool.Put(buf)
+				}
+			}
+		}()
 		for {
-			buf := pool.Get(pool.UDPBufferSize)
-			n, remoteAddr, err := l.ReadFrom(buf)
+			for i := range bufs {
+				if bufs[i] == nil {
+					bufs[i] = pool.Get(pool.UDPBufferSize)
+				}
+			}
+			n, err := reader.Read(bufs)
 			if err != nil {
-				pool.Put(buf)
 				if sl.closed {
 					break
 				}
 				continue
 			}
-			sl.handleUDP(l, tunnel, buf[:n], remoteAddr, additions...)
+			for i := 0; i < n; i++ {
+				sl.handleUDP(l, tunnel, bufs[i][:reader.Len(i)], reader.Addr(i), additions...)
+				bufs[i] = nil // handed over with the packet
+			}
 		}
 	}()
 

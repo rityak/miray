@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/metacubex/mihomo/adapter/inbound"
+	N "github.com/metacubex/mihomo/common/net"
 	"github.com/metacubex/mihomo/common/sockopt"
 	C "github.com/metacubex/mihomo/constant"
 	LC "github.com/metacubex/mihomo/listener/config"
@@ -30,6 +31,9 @@ import (
 	M "github.com/metacubex/sing/common/metadata"
 	"github.com/metacubex/sing/common/network"
 )
+
+// udpReadBatch bounds the datagrams taken per recvmmsg (T-060).
+const udpReadBatch = 16
 
 type Listener struct {
 	closed       bool
@@ -164,39 +168,40 @@ func New(config LC.ShadowsocksServer, lc C.InboundListenConfig, tunnel C.Tunnel,
 			go func() {
 				conn := bufio.NewPacketConn(ul)
 				rwOptions := network.NewReadWaitOptions(conn, sl.service)
-				readWaiter, isReadWaiter := bufio.CreatePacketReadWaiter(conn)
-				if isReadWaiter {
-					readWaiter.InitializeReadWaiter(rwOptions)
-				}
-				for {
-					var (
-						buff *buf.Buffer
-						dest M.Socksaddr
-						err  error
-					)
-					buff = nil // clear last loop status, avoid repeat release
-					if isReadWaiter {
-						buff, dest, err = readWaiter.WaitReadPacket()
-					} else {
-						buff = rwOptions.NewPacketBuffer()
-						dest, err = conn.ReadPacket(buff)
-						if buff != nil {
-							rwOptions.PostReturn(buff)
-						}
+				// the datagrams already queued are read with one recvmmsg (T-060)
+				reader := N.NewBatchReader(ul, udpReadBatch)
+				buffs := make([]*buf.Buffer, udpReadBatch)
+				bufs := make([][]byte, udpReadBatch)
+				defer func() {
+					for _, buff := range buffs {
+						buff.Release() // nil-safe
 					}
+				}()
+				ctx := sing.WithInAddr(context.TODO(), ul.LocalAddr())
+				for {
+					for i := range buffs {
+						if buffs[i] == nil {
+							buffs[i] = rwOptions.NewPacketBuffer()
+						}
+						bufs[i] = buffs[i].FreeBytes()
+					}
+					n, err := reader.Read(bufs)
 					if err != nil {
-						buff.Release()
 						if sl.closed {
 							break
 						}
 						continue
 					}
-					ctx := context.TODO()
-					ctx = sing.WithInAddr(ctx, ul.LocalAddr())
-					_ = sl.service.NewPacket(ctx, conn, buff, M.Metadata{
-						Protocol: "shadowsocks",
-						Source:   dest,
-					})
+					for i := 0; i < n; i++ {
+						buff := buffs[i]
+						buffs[i] = nil // handed over to the service
+						buff.Truncate(reader.Len(i))
+						rwOptions.PostReturn(buff)
+						_ = sl.service.NewPacket(ctx, conn, buff, M.Metadata{
+							Protocol: "shadowsocks",
+							Source:   M.SocksaddrFromNet(reader.Addr(i)).Unwrap(),
+						})
+					}
 				}
 			}()
 		}
