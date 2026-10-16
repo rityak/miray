@@ -53,7 +53,6 @@ func testUDPEchoOrder(t *testing.T, tunnel *TestTunnel, out packetListener) {
 		got++
 	}
 	if got < count/5 { // a burst over QUIC on a busy 2-CPU host loses up to ~60%; order is what is checked
-
 		t.Fatalf("only %d of %d echoes", got, count)
 	}
 	if reordered > 0 {
