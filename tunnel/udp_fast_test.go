@@ -287,3 +287,55 @@ func TestUDPFastPathDropsMissingFakeIP(t *testing.T) {
 	default:
 	}
 }
+
+type replyRecorder struct {
+	benchPacket
+	replies chan []byte
+}
+
+func (p *replyRecorder) WriteBack(b []byte, _ net.Addr) (int, error) {
+	p.replies <- append([]byte(nil), b...)
+	return len(b), nil
+}
+
+// A burst of replies on a session comes back complete and in order: on Linux
+// the session socket is read in recvmmsg batches (T-051).
+func TestUDPRepliesInOrder(t *testing.T) {
+	sink, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sink.Close()
+	oldProxies, oldMode := proxies, mode.Load()
+	proxies = map[string]C.Proxy{"DIRECT": &lifecycleProxy{}}
+	mode.Store(Direct)
+	defer func() { proxies = oldProxies; mode.Store(oldMode) }()
+	OnRunning()
+
+	src := netip.MustParseAddrPort("198.18.0.1:40051")
+	dst := sink.LocalAddr().(*net.UDPAddr).AddrPort()
+	p := &replyRecorder{benchPacket{[]byte{0}, net.UDPAddrFromAddrPort(src)}, make(chan []byte, 256)}
+	Tunnel.HandleUDPPacket(p, &C.Metadata{NetWork: C.UDP, Type: C.SOCKS5,
+		SrcIP: src.Addr(), SrcPort: src.Port(), DstIP: dst.Addr(), DstPort: dst.Port()})
+
+	b := make([]byte, 16)
+	_ = sink.SetReadDeadline(time.Now().Add(2 * time.Second))
+	_, from, err := sink.ReadFrom(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const count = 100
+	for i := 0; i < count; i++ {
+		_, _ = sink.WriteTo([]byte{byte(i), byte(i)}, from)
+	}
+	for i := 0; i < count; i++ {
+		select {
+		case r := <-p.replies:
+			if len(r) != 2 || r[0] != byte(i) {
+				t.Fatalf("reply %d is %v", i, r)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("only %d of %d replies", i, count)
+		}
+	}
+}
