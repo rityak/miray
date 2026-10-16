@@ -235,3 +235,55 @@ func TestUDPFlowLifecycle(t *testing.T) {
 	ingress(failed, 4)
 	eventually(t, "flow not forgotten after a failed dial", gone(failed))
 }
+
+// fakeIPOnly is a fake-ip mapper that knows the pool but holds no records.
+type fakeIPOnly struct{ pool netip.Prefix }
+
+func (m fakeIPOnly) FakeIPEnabled() bool                    { return true }
+func (m fakeIPOnly) MappingEnabled() bool                   { return true }
+func (m fakeIPOnly) IsFakeIP(ip netip.Addr) bool            { return m.pool.Contains(ip) }
+func (m fakeIPOnly) IsFakeBroadcastIP(netip.Addr) bool      { return false }
+func (m fakeIPOnly) IsExistFakeIP(netip.Addr) bool          { return false }
+func (m fakeIPOnly) FindHostByIP(netip.Addr) (string, bool) { return "", false }
+func (m fakeIPOnly) FlushFakeIP() error                     { return nil }
+func (m fakeIPOnly) InsertHostByIP(netip.Addr, string)      {}
+func (m fakeIPOnly) StoreFakePoolState()                    {}
+
+// A datagram of an established session to a fake IP whose record is gone is
+// dropped, as the regular path drops it, instead of being sent to the fake IP
+// itself (T-057).
+func TestUDPFastPathDropsMissingFakeIP(t *testing.T) {
+	previous := resolver.DefaultHostMapper
+	resolver.DefaultHostMapper = fakeIPOnly{netip.MustParsePrefix("198.18.0.0/16")}
+	t.Cleanup(func() { resolver.DefaultHostMapper = previous })
+
+	src := netip.MustParseAddrPort("198.18.0.1:40011")
+	pc := &recordPC{writes: make(chan netip.AddrPort, 4)}
+	sender := newPacketSender().(*packetSender)
+	defer sender.Close()
+	registerFlow(t, src, sender)
+	go sender.Process(pc, nil)
+
+	var drops atomic.Int32
+	stale := netip.MustParseAddrPort("198.18.9.9:443")
+	real := netip.MustParseAddrPort("192.0.2.1:443")
+	for _, dst := range []netip.AddrPort{stale, real} {
+		if !Tunnel.HandleUDPPacketFast(src, &dropCounter{benchFastPacket{[]byte{1}, dst}, &drops}) {
+			t.Fatal("refused a packet of an established session")
+		}
+	}
+	select {
+	case got := <-pc.writes:
+		if got != real {
+			t.Fatalf("written to %s, want only %s", got, real)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("real destination not written")
+	}
+	eventually(t, "packets not released", func() bool { return drops.Load() == 2 })
+	select {
+	case got := <-pc.writes:
+		t.Fatalf("unexpected write to %s", got)
+	default:
+	}
+}

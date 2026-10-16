@@ -148,7 +148,13 @@ func (s *packetSender) forward(pc C.PacketConn, metadata *C.Metadata, data []byt
 		originMetadata := metadata  // save origin metadata
 		metadata = metadata.Clone() // don't modify PacketAdapter's metadata
 
-		_ = preHandleMetadata(metadata) // error was pre-checked
+		// The pre-check of handleUDPConn runs only for a new session (and never
+		// on the fast path), so a destination added later is checked here: a fake
+		// IP without its record must not be sent to as is.
+		if err := preHandleMetadata(metadata); err != nil {
+			log.Debugln("[Metadata PreHandle] error: %s", err)
+			return
+		}
 		metadata = metadata.Pure()
 		if metadata.Host != "" {
 			// TODO: ResolveUDP may take a long time to block the Process loop
