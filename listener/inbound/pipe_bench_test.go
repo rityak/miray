@@ -68,6 +68,17 @@ var pipeCases = []pipeCase{
 		},
 	},
 	{
+		name: "ss-aead", udp: true, // classic AEAD, Gold with SS2022 (D-008)
+		in: func(port string) (pipeServer, error) {
+			return inbound.NewShadowSocks(&inbound.ShadowSocksOption{BaseOption: base("ss", port),
+				Password: userUUID, Cipher: "aes-128-gcm", UDP: true})
+		},
+		out: func(a netip.AddrPort, _ *TestTunnel) (C.ProxyAdapter, error) {
+			return outbound.NewShadowSocks(outbound.ShadowSocksOption{Name: "ss", Server: a.Addr().String(), Port: int(a.Port()),
+				Password: userUUID, Cipher: "aes-128-gcm", UDP: true})
+		},
+	},
+	{
 		name: "trojan",
 		in: func(port string) (pipeServer, error) {
 			return inbound.NewTrojan(&inbound.TrojanOption{BaseOption: base("trojan", port),
@@ -105,6 +116,20 @@ var pipeCases = []pipeCase{
 		},
 	},
 	{
+		name: "hy2-salamander", udp: true,
+		in: func(port string) (pipeServer, error) {
+			return inbound.NewHysteria2(&inbound.Hysteria2Option{BaseOption: base("hy2", port),
+				Users: map[string]string{"u": userUUID}, Certificate: tlsCertificate, PrivateKey: tlsPrivateKey,
+				Obfs: "salamander", ObfsPassword: userUUID})
+		},
+		out: func(a netip.AddrPort, t *TestTunnel) (C.ProxyAdapter, error) {
+			o := outbound.Hysteria2Option{Name: "hy2", Server: a.Addr().String(), Port: int(a.Port()), Password: userUUID, Fingerprint: tlsFingerprint,
+				Obfs: "salamander", ObfsPassword: userUUID}
+			o.DialerForAPI, o.TunnelForAPI = t.NewDialer(), t
+			return outbound.NewHysteria2(o)
+		},
+	},
+	{
 		name: "tuic", udp: true,
 		in: func(port string) (pipeServer, error) {
 			return inbound.NewTuic(&inbound.TuicOption{BaseOption: base("tuic", port),
@@ -117,6 +142,41 @@ var pipeCases = []pipeCase{
 			return outbound.NewTuic(o)
 		},
 	},
+	{
+		name: "anytls", udp: true,
+		in: func(port string) (pipeServer, error) {
+			return inbound.NewAnyTLS(&inbound.AnyTLSOption{BaseOption: base("anytls", port),
+				Users: map[string]string{"u": userUUID}, Certificate: tlsCertificate, PrivateKey: tlsPrivateKey})
+		},
+		out: func(a netip.AddrPort, t *TestTunnel) (C.ProxyAdapter, error) {
+			o := outbound.AnyTLSOption{Name: "anytls", Server: a.Addr().String(), Port: int(a.Port()), Password: userUUID,
+				Fingerprint: tlsFingerprint, UDP: true}
+			o.DialerForAPI, o.TunnelForAPI = t.NewDialer(), t
+			return outbound.NewAnyTLS(o)
+		},
+	},
+	trustTunnelCase("trusttunnel-h2", false),
+	trustTunnelCase("trusttunnel-quic", true),
+}
+
+func trustTunnelCase(name string, quic bool) pipeCase {
+	return pipeCase{
+		name: name, udp: true,
+		in: func(port string) (pipeServer, error) {
+			o := inbound.TrustTunnelOption{BaseOption: base("trusttunnel", port),
+				Users: []inbound.AuthUser{{Username: "u", Password: userUUID}}, Certificate: tlsCertificate, PrivateKey: tlsPrivateKey}
+			if quic {
+				o.Network, o.CongestionController = []string{"udp"}, "bbr"
+			}
+			return inbound.NewTrustTunnel(&o)
+		},
+		out: func(a netip.AddrPort, t *TestTunnel) (C.ProxyAdapter, error) {
+			o := outbound.TrustTunnelOption{Name: "trusttunnel", Server: a.Addr().String(), Port: int(a.Port()), UserName: "u", Password: userUUID,
+				Fingerprint: tlsFingerprint, UDP: true, Quic: quic}
+			o.DialerForAPI, o.TunnelForAPI = t.NewDialer(), t
+			return outbound.NewTrustTunnel(o)
+		},
+	}
 }
 
 // startPipe brings up the pair; the caller sets the tunnel handlers first.
