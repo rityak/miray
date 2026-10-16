@@ -199,7 +199,9 @@ func (s *packetSender) processFastBatch(pc C.PacketConn, proxy C.WriteBackProxy,
 	if !s.batchInit {
 		s.batchInit = true
 		if ac, ok := pc.(*udpActivityConn); ok {
-			s.batch = newBatchWriter(ac.PacketConn)
+			if s.batch = newBatchWriter(ac.PacketConn); s.batch != nil {
+				trackActivity(s.batch, ac)
+			}
 		}
 	}
 	if s.batch == nil {
@@ -242,9 +244,7 @@ func (s *packetSender) flushBatch(pc C.PacketConn, pkts []C.UDPFastPacket) {
 		if len(datas) == 0 {
 			return
 		}
-		if s.batch.write(datas, addrs) == nil {
-			pc.(*udpActivityConn).lastWrite.Store(time.Now().UnixNano())
-		}
+		_ = s.batch.write(datas, addrs) // lastWrite is kept by the batch writer's count
 		datas, addrs = datas[:0], addrs[:0]
 	}
 	for _, p := range pkts {

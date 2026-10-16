@@ -176,6 +176,34 @@ func TestBatchWriterSkipsFailedDatagram(t *testing.T) {
 	}
 }
 
+// A batch with a refused datagram still marks the session active: the idle
+// timeout must not close a flow whose other datagrams go out.
+func TestBatchWriterActivityWithRefusedDatagram(t *testing.T) {
+	sink, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sink.Close()
+	conn, err := net.ListenUDP("udp", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	w := &batchWriter{v6: ipv6.NewPacketConn(conn), udp: conn, msgs: make([]ipv6.Message, maxBatch), count: func(int64) {}}
+	for i := range w.msgs {
+		w.msgs[i].Buffers = make([][]byte, 1)
+	}
+	ac := &udpActivityConn{}
+	trackActivity(w, ac)
+	bad := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0}
+	if err := w.write([][]byte{{1}, {2, 2}}, []*net.UDPAddr{bad, sink.LocalAddr().(*net.UDPAddr)}); err == nil {
+		t.Fatal("refused datagram reported no error")
+	}
+	if ac.lastWrite.Load() == 0 {
+		t.Fatal("a batch that sent a datagram did not extend the idle timeout")
+	}
+}
+
 func TestIsGSOError(t *testing.T) {
 	for _, err := range []error{unix.EIO, unix.EINVAL, unix.ENOPROTOOPT, unix.EOPNOTSUPP,
 		&net.OpError{Op: "write", Err: os.NewSyscallError("sendmsg", unix.EIO)}} {
