@@ -156,6 +156,7 @@ func (h *ListenerHandler) NewPacketConnection(ctx context.Context, conn network.
 	}
 
 	connID := utils.NewUUIDV4().String() // make a new SNAT key
+	reply := getReplyConn(ctx)
 
 	defer func() { _ = conn.Close() }()
 	mutex := sync.Mutex{}
@@ -198,6 +199,7 @@ func (h *ListenerHandler) NewPacketConnection(ctx context.Context, conn network.
 			rAddr:  metadata.Source.UDPAddr(),
 			lAddr:  conn.LocalAddr(),
 			buff:   buff,
+			reply:  reply,
 		}
 		cPacket.rAddr = N.NewCustomAddr(h.Type.String(), connID, cPacket.rAddr) // for tunnel's handleUDPConn
 		if lAddr := getInAddr(ctx); lAddr != nil {
