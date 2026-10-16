@@ -585,8 +585,8 @@ func handleUDPConn(packet C.PacketAdapter) {
 	})
 	if !loaded {
 		dial := func() (C.PacketConn, C.WriteBackProxy, error) {
-			originMetadata := metadata  // save origin metadata
-			metadata = metadata.Clone() // don't modify PacketAdapter's metadata
+			originMetadata := metadata   // save origin metadata
+			metadata := metadata.Clone() // don't modify PacketAdapter's metadata; a new variable, so the outer one stays on the stack per packet (T-062)
 
 			if err := sender.DoSniff(metadata); err != nil {
 				log.Warnln("[UDP] DoSniff error: %s", err.Error())
