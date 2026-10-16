@@ -1,101 +1,54 @@
-<h1 align="center">
-  <img src="Meta.png" alt="Meta Kennel" width="200">
-  <br>Meta Kernel<br>
-</h1>
+# miray
 
-<h3 align="center">Another Mihomo Kernel.</h3>
+Форк [mihomo](https://github.com/MetaCubeX/mihomo). Рабочая ветка — `dev`.
 
-<p align="center">
-  <a href="https://goreportcard.com/report/github.com/MetaCubeX/mihomo">
-    <img src="https://goreportcard.com/badge/github.com/MetaCubeX/mihomo?style=flat-square">
-  </a>
-  <img src="https://img.shields.io/github/go-mod/go-version/MetaCubeX/mihomo/Alpha?style=flat-square">
-  <a href="https://github.com/MetaCubeX/mihomo/releases">
-    <img src="https://img.shields.io/github/release/MetaCubeX/mihomo/all.svg?style=flat-square">
-  </a>
-  <a href="https://github.com/MetaCubeX/mihomo">
-    <img src="https://img.shields.io/badge/release-Meta-00b4f0?style=flat-square">
-  </a>
-</p>
+## Фичи
 
-## Features
+TUN
+- `gso` включён по умолчанию для стеков mips и system: скорость на потолке +43%, CPU на гигабайт −30%.
+- Если TUN с `gso` не открылся, он запускается без него.
+- gvisor: буфер TCP 1 МиБ с ростом до 8/6 МиБ вместо 20 КиБ. TCP через gvisor больше не упирается в окно.
+- mipstack: буфер приёма TCP растёт и на отдаче через TUN.
+- Битый пакет из TUN больше не роняет процесс (стек system).
 
-- Local HTTP/HTTPS/SOCKS server with authentication support
-- VMess, VLESS, Shadowsocks, Trojan, Snell, TUIC, Hysteria protocol support
-- Built-in DNS server that aims to minimize DNS pollution attack impact, supports DoH/DoT upstream and fake IP.
-- Rules based off domains, GEOIP, IPCIDR or Process to forward packets to different nodes
-- Remote groups allow users to implement powerful rules. Supports automatic fallback, load balancing or auto select node
-  based off latency
-- Remote providers, allowing users to get node lists remotely instead of hard-coding in config
-- Netfilter TCP redirecting. Deploy Mihomo on your Internet gateway with `iptables`.
-- Comprehensive HTTP RESTful API controller
+UDP
+- Входящий UDP читается пачками (`recvmmsg`): потолок ss UDP вырос с 297 до 435 Мбит/с, CPU клиента на гигабайт −28%.
+- DIRECT отправляет пачками (`sendmmsg`) и через UDP GSO.
+- Пакеты уже открытых UDP-потоков TUN идут в обход общей очереди.
+- hysteria2 и tuic больше не переставляют датаграммы одного потока.
+- Открытые UDP-сессии не теряют пакеты во время reload конфига.
 
-## Dashboard
+Reload и DNS
+- Reload без простоя: providers грузятся, пока работает старый конфиг. Новое TCP-соединение ждёт окончания reload, а не сбрасывается.
+- Кеш DNS и открытые соединения к DNS-серверам переживают reload, если раздел `dns:` не менялся.
+- DNS `tcp://` держит соединения открытыми, а не открывает новое на каждый запрос.
+- Медленный DNS не блокирует остальной трафик и reload.
 
-A web dashboard with first-class support for this project has been created; it can be checked out at [metacubexd](https://github.com/MetaCubeX/metacubexd).
+TCP
+- Нет лишних 200 мс ожидания early-data для серверов, которые говорят первыми (SSH, SMTP).
+- При переборе адресов каждый получает свою долю таймаута.
 
-## Configration example
+QUIC (hysteria2, tuic)
+- Очередь входящих пакетов 4096 вместо 256: потолок hysteria2 ×1,5, CPU клиента на гигабайт −30%.
+- Соединение переживает переполненный буфер сокета и смену сети.
+- GREASE QUIC bit: на один признак QUIC для DPI меньше.
+- На Windows отправка пачками через USO.
 
-Configuration example is located at [/docs/config.yaml](https://github.com/MetaCubeX/mihomo/blob/Alpha/docs/config.yaml).
+Остальное
+- utls и reality: все TLS-записи одного `Write` уходят одним системным вызовом.
+- smux: запись, брошенная по таймауту, больше не уходит в сеть с чужими данными.
+- Исправлены гонки данных в XTLS Vision, restls и anytls.
+- Апдейтер не ставит mihomo поверх miray.
 
-## Docs
+## Репозитории
 
-Documentation can be found in [mihomo Docs](https://wiki.metacubex.one/).
+- [rityak/miray](https://github.com/rityak/miray) — ядро
+- [rityak/quic-go](https://github.com/rityak/quic-go) — QUIC для hysteria2 и tuic
+- [rityak/sing-quic](https://github.com/rityak/sing-quic) — hysteria2
+- [rityak/sing-tun](https://github.com/rityak/sing-tun) — TUN
+- [rityak/mipstack](https://github.com/rityak/mipstack) — сетевой стек mips
+- [rityak/utls](https://github.com/rityak/utls) — TLS-клиент
+- [rityak/smux](https://github.com/rityak/smux) — мультиплексор
+- [rityak/restls-client-go](https://github.com/rityak/restls-client-go) — restls
 
-## For development
-
-Requirements:
-[Go 1.20 or newer](https://go.dev/dl/)
-
-Build mihomo:
-
-```shell
-git clone https://github.com/MetaCubeX/mihomo.git
-cd mihomo && go mod download
-go build
-```
-
-Set go proxy if a connection to GitHub is not possible:
-
-```shell
-go env -w GOPROXY=https://goproxy.io,direct
-```
-
-Build with gvisor tun stack:
-
-```shell
-go build -tags with_gvisor
-```
-
-### IPTABLES configuration
-
-Work on Linux OS which supported `iptables`
-
-```yaml
-# Enable the TPROXY listener
-tproxy-port: 9898
-
-iptables:
-  enable: true # default is false
-  inbound-interface: eth0 # detect the inbound interface, default is 'lo'
-```
-
-## Debugging
-
-Check [wiki](https://wiki.metacubex.one/api/#debug) to get an instruction on using debug
-API.
-
-## Credits
-
-- [Dreamacro/clash](https://github.com/Dreamacro/clash)
-- [SagerNet/sing-box](https://github.com/SagerNet/sing-box)
-- [riobard/go-shadowsocks2](https://github.com/riobard/go-shadowsocks2)
-- [v2ray/v2ray-core](https://github.com/v2ray/v2ray-core)
-- [WireGuard/wireguard-go](https://github.com/WireGuard/wireguard-go)
-- [yaling888/clash-plus-pro](https://github.com/yaling888/clash)
-
-## License
-
-This software is released under the GPL-3.0 license.
-
-**In addition, any downstream projects not affiliated with `MetaCubeX` shall not contain the word `mihomo` in their names.**
+В форках наш код лежит в ветке `miray`.
