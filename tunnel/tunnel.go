@@ -229,8 +229,21 @@ func (t tunnel) RuleUpdateCallback() *utils.Callback[P.RuleProvider] {
 	return ruleUpdateCallback
 }
 
+// running is closed while the tunnel is Running; a reload swaps in a new one.
+var (
+	runningMu sync.Mutex
+	running   = make(chan struct{})
+)
+
 func OnSuspend() {
 	status.Store(Suspend)
+	runningMu.Lock()
+	select {
+	case <-running:
+		running = make(chan struct{})
+	default:
+	}
+	runningMu.Unlock()
 }
 
 func OnInnerLoading() {
@@ -239,6 +252,37 @@ func OnInnerLoading() {
 
 func OnRunning() {
 	status.Store(Running)
+	runningMu.Lock()
+	select {
+	case <-running:
+	default:
+		close(running)
+	}
+	runningMu.Unlock()
+}
+
+// reloadWait bounds how long a new connection waits for a config reload.
+const reloadWait = 5 * time.Second
+
+// waitHandle is isHandle that lets a new TCP connection arriving during a
+// reload wait for it to finish instead of being closed at once (T-067).
+func waitHandle(t C.Type) bool {
+	if isHandle(t) {
+		return true
+	}
+	runningMu.Lock()
+	ch := running
+	runningMu.Unlock()
+	if isHandle(t) {
+		return true
+	}
+	timer := time.NewTimer(reloadWait)
+	defer timer.Stop()
+	select {
+	case <-ch:
+	case <-timer.C:
+	}
+	return isHandle(t)
 }
 
 func Status() TunnelStatus {
@@ -662,7 +706,7 @@ const earlyDataWait = 200 * time.Millisecond
 var serverFirst = lru.New(lru.WithSize[string, struct{}](1024), lru.WithAge[string, struct{}](600))
 
 func handleTCPConn(connCtx C.ConnContext) {
-	if !isHandle(connCtx.Metadata().Type) {
+	if !waitHandle(connCtx.Metadata().Type) {
 		_ = connCtx.Conn().Close()
 		return
 	}
