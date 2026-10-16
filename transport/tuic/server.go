@@ -124,7 +124,9 @@ func (s *serverHandler) handleMessage() (err error) {
 		if err != nil {
 			return err
 		}
-		go func() (err error) {
+		// in order: after authentication nothing here blocks, before it the wait
+		// is bounded by AuthenticationTimeout (T-064)
+		func() (err error) {
 			if len(message) > 0 {
 				switch message[0] {
 				case v4.VER:

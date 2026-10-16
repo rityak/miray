@@ -17,6 +17,7 @@ import (
 	"github.com/metacubex/mihomo/common/xsync"
 	C "github.com/metacubex/mihomo/constant"
 	"github.com/metacubex/mihomo/log"
+	tuicCommon "github.com/metacubex/mihomo/transport/tuic/common"
 	"github.com/metacubex/mihomo/transport/tuic/types"
 
 	"github.com/metacubex/quic-go"
@@ -178,7 +179,8 @@ func (t *clientImpl) handleMessage(quicConn *quic.Conn) (err error) {
 		if err != nil {
 			return err
 		}
-		go func() (err error) {
+		// in order: the input of an association never blocks (T-064)
+		func() (err error) {
 			var assocId uint32
 			defer func() {
 				t.deferQuicConn(quicConn, err)
@@ -346,10 +348,11 @@ func (t *clientImpl) ListenPacket(ctx context.Context, metadata *C.Metadata) (ne
 	}
 
 	pipe1, pipe2 := N.Pipe()
+	input := tuicCommon.NewPacketInput(pipe1)
 	var connId uint32
 	for {
 		connId = randv2.Uint32()
-		_, loaded := t.udpInputMap.LoadOrStore(connId, pipe1)
+		_, loaded := t.udpInputMap.LoadOrStore(connId, input)
 		if !loaded {
 			break
 		}
@@ -362,7 +365,9 @@ func (t *clientImpl) ListenPacket(ctx context.Context, metadata *C.Metadata) (ne
 		maxUdpRelayPacketSize: t.MaxUdpRelayPacketSize,
 		deferQuicConnFn:       t.deferQuicConn,
 		closeDeferFn: func() {
-			t.udpInputMap.Delete(connId)
+			if in, ok := t.udpInputMap.LoadAndDelete(connId); ok {
+				_ = in.Close() // stops its writer goroutine
+			}
 			time.AfterFunc(C.DefaultUDPTimeout, func() {
 				openStreams := t.openStreams.Add(-1)
 				if openStreams == 0 && t.closed.Load() {

@@ -48,8 +48,7 @@ func (q *quicStreamPacketConn) close() (err error) {
 		}()
 	}
 	if q.inputConn != nil {
-		_ = q.inputConn.Close()
-		q.inputConn = nil
+		_ = q.inputConn.Close() // not set to nil: a concurrent read uses it and gets the close error (T-064)
 
 		buf := pool.GetBuffer()
 		defer pool.PutBuffer(buf)
