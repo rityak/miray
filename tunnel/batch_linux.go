@@ -176,6 +176,7 @@ func (w *batchWriter) writeMulti(datas [][]byte, addrs []*net.UDPAddr) error {
 		ms[i].Addr = addrs[i]
 		ms[i].N = 0
 	}
+	var firstErr error
 	for len(ms) > 0 {
 		var n int
 		var err error
@@ -184,18 +185,30 @@ func (w *batchWriter) writeMulti(datas [][]byte, addrs []*net.UDPAddr) error {
 		} else {
 			n, err = w.v6.WriteBatch(ms, 0)
 		}
+		if n < 0 { // x/net passes on the -1 of a failed sendmmsg
+			n = 0
+		}
 		var sent int64
 		for _, m := range ms[:n] {
 			sent += int64(m.N)
 		}
 		w.count(sent)
-		if err != nil {
-			return err
-		}
-		if n == 0 {
-			return nil
-		}
 		ms = ms[n:]
+		if err == nil {
+			if n == 0 {
+				break
+			}
+			continue
+		}
+		if firstErr == nil {
+			firstErr = err
+		}
+		if errors.Is(err, net.ErrClosed) || len(ms) == 0 {
+			break
+		}
+		// sendmmsg stops at the first datagram the kernel refuses (no route,
+		// firewall): drop that one alone, as a sendto per datagram would
+		ms = ms[1:]
 	}
-	return nil
+	return firstErr
 }
