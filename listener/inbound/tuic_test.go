@@ -126,3 +126,44 @@ func TestInboundTuic_TLS(t *testing.T) {
 		testInboundTuic(t, inboundOptions, outboundOptions)
 	})
 }
+
+// T-064: datagrams of one flow keep their order through tuic (native UDP relay).
+func TestInboundTuicUDPOrder(t *testing.T) {
+	for _, version := range []string{"v4", "v5"} {
+		t.Run(version, func(t *testing.T) {
+			in, err := inbound.NewTuic(&inbound.TuicOption{
+				BaseOption:  inbound.BaseOption{NameStr: "tuic_udp_inbound", Listen: "127.0.0.1", Port: "0"},
+				Users:       map[string]string{userUUID: userUUID},
+				Token:       []string{userUUID},
+				Certificate: tlsCertificate, PrivateKey: tlsPrivateKey,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			tunnel := NewHttpTestTunnel()
+			defer tunnel.Close()
+			if err := in.Listen(tunnel); err != nil {
+				t.Fatal(err)
+			}
+			defer in.Close()
+			addrPort := netip.MustParseAddrPort(in.Address())
+			outOptions := outbound.TuicOption{
+				Name: "tuic_udp_outbound", Server: addrPort.Addr().String(), Port: int(addrPort.Port()),
+				Fingerprint: tlsFingerprint, UdpRelayMode: "native",
+			}
+			if version == "v4" {
+				outOptions.Token = userUUID
+			} else {
+				outOptions.UUID, outOptions.Password = userUUID, userUUID
+			}
+			outOptions.DialerForAPI = tunnel.NewDialer()
+			outOptions.TunnelForAPI = tunnel
+			out, err := outbound.NewTuic(outOptions)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer out.Close()
+			testUDPEchoOrder(t, tunnel, out)
+		})
+	}
+}
