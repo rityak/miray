@@ -101,6 +101,7 @@ type httpConn struct {
 	createErr error
 	cancelFn  func()
 	closeFn   func()
+	bodySent  chan struct{} // client: closed when the transport is done with the request body (T-085)
 	httputils.NetAddr
 
 	// deadlines
@@ -126,14 +127,36 @@ func (h *httpConn) waitCreated() error {
 	return h.createErr
 }
 
+// closeLinger bounds how long a closed client stream may still send what was
+// written before Close (T-085).
+const closeLinger = 5 * time.Second
+
 func (h *httpConn) Close() error {
-	var errorArr []error
 	h.setup(nil, net.ErrClosed)
+	var err error
 	if closer, ok := h.writer.(io.Closer); ok {
-		errorArr = append(errorArr, closer.Close())
+		err = closer.Close() // the request body ends here: END_STREAM after the data
 	}
+	if h.bodySent != nil {
+		// Closing the response body or cancelling the request resets the stream at
+		// once and drops the data still waiting for the flow-control window: tear
+		// down only after the transport finished the body (T-085).
+		go func() {
+			select {
+			case <-h.bodySent:
+			case <-time.After(closeLinger):
+			}
+			_ = h.teardown()
+		}()
+		return err
+	}
+	return errors.Join(err, h.teardown())
+}
+
+func (h *httpConn) teardown() error {
+	var err error
 	if h.body != nil {
-		errorArr = append(errorArr, h.body.Close())
+		err = h.body.Close()
 	}
 	if h.cancelFn != nil {
 		h.cancelFn()
@@ -141,7 +164,20 @@ func (h *httpConn) Close() error {
 	if h.closeFn != nil {
 		h.closeFn()
 	}
-	return errors.Join(errorArr...)
+	return err
+}
+
+// sentReader tells when the transport closes the request body: it does so once
+// the body is sent or the stream is gone.
+type sentReader struct {
+	*io.PipeReader
+	once sync.Once
+	sent chan struct{}
+}
+
+func (r *sentReader) Close() error {
+	r.once.Do(func() { close(r.sent) })
+	return r.PipeReader.Close()
 }
 
 func (h *httpConn) writeFlush(p []byte) (n int, err error) {
