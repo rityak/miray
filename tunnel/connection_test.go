@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/metacubex/mihomo/component/nat"
 	C "github.com/metacubex/mihomo/constant"
 )
 
@@ -152,5 +153,45 @@ func TestForwardMappedIPWithoutAllocs(t *testing.T) {
 	}
 	if n := testing.AllocsPerRun(100, func() { s.forward(pc, origin, data) }); n != 0 {
 		t.Fatalf("%v allocs per datagram, want 0", n)
+	}
+}
+
+// While a config reload is applied (tunnel not Running), a datagram of an
+// established regular-path session still goes out; a new session waits (T-066).
+func TestUDPEstablishedSurvivesReload(t *testing.T) {
+	OnRunning()
+	defer OnRunning()
+	udpInit.Do(initUDP)
+	udp, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer udp.Close()
+	pc := &benchPC{udp: udp, done: make(chan struct{}, 1)}
+	src := &net.UDPAddr{IP: net.IPv4(198, 18, 0, 66), Port: 40066}
+	metadata := func() *C.Metadata {
+		m := benchMetadata()
+		m.Type, m.SrcIP, m.SrcPort = C.SOCKS5, netip.MustParseAddr("198.18.0.66"), 40066
+		return m
+	}
+	sender := newPacketSender()
+	natTable.GetOrCreate(src.String(), func() C.PacketSender { return sender })
+	defer func() { sender.Close(); natTable.Delete(src.String()) }()
+	sender.AddMapping(metadata(), metadata())
+	go sender.Process(pc, nat.NewWriteBackProxy(&benchPacket{[]byte{1}, src}))
+
+	OnSuspend()
+	Tunnel.HandleUDPPacket(&benchPacket{[]byte{1}, src}, metadata())
+	select {
+	case <-pc.done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("datagram of an established session dropped during reload")
+	}
+
+	fresh := &benchPacket{[]byte{2}, &net.UDPAddr{IP: net.IPv4(198, 18, 0, 67), Port: 40067}}
+	Tunnel.HandleUDPPacket(fresh, metadata())
+	time.Sleep(100 * time.Millisecond)
+	if _, ok := natTable.Get(fresh.addr.String()); ok {
+		t.Fatal("a new session was created during reload")
 	}
 }

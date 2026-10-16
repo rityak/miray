@@ -549,11 +549,6 @@ func processUDP(queue chan C.PacketAdapter) {
 }
 
 func handleUDPConn(packet C.PacketAdapter) {
-	if !isHandle(packet.Metadata().Type) {
-		packet.Drop()
-		return
-	}
-
 	metadata := packet.Metadata()
 	if !metadata.Valid() {
 		packet.Drop()
@@ -567,6 +562,13 @@ func handleUDPConn(packet C.PacketAdapter) {
 	// and it costs a Clone plus fake-ip/hosts lookups per packet (S-001, F4).
 	if sender, ok := natTable.Get(key); ok {
 		sender.Send(packet) // nonblocking
+		return
+	}
+
+	// Only a new session waits for Running: established ones keep working while
+	// a config reload is applied, like TCP relays and the fast path (D-003, T-066).
+	if !isHandle(metadata.Type) {
+		packet.Drop()
 		return
 	}
 
