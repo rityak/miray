@@ -275,7 +275,7 @@ func (ss *ShadowSocks) ListenPacketContext(ctx context.Context, metadata *C.Meta
 	if err != nil {
 		return nil, err
 	}
-	pc = ss.method.DialPacketConn(bufio.NewBindPacketConn(pc, addr))
+	pc = ss.method.DialPacketConn(bufio.NewBindPacketConn(connectUDP(pc, addr), addr))
 	return NewPacketConn(pc, ss), nil
 }
 
