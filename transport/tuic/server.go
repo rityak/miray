@@ -232,10 +232,10 @@ func NewServer(option *ServerOption, pc net.PacketConn) (*Server, error) {
 		}
 	}
 	if len(option.Users) > 0 {
+		// Not clamped to MaxFragSize (T-081): that cut every datagram over ~1170 bytes
+		// in two even on a path that carries 1400. One that does not fit the path now
+		// comes back as DatagramTooLargeError and is fragmented then (packet.go).
 		maxUdpRelayPacketSize := option.MaxUdpRelayPacketSize
-		if maxUdpRelayPacketSize > MaxFragSizeV5 {
-			maxUdpRelayPacketSize = MaxFragSizeV5
-		}
 		server.optionV5 = &v5.ServerOption{
 			HandleTcpFn:           option.HandleTcpFn,
 			HandleUdpFn:           option.HandleUdpFn,

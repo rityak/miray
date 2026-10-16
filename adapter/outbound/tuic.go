@@ -281,10 +281,10 @@ func NewTuic(option TuicOption) (*Tuic, error) {
 
 		t.client = tuic.NewPoolClientV4(clientOption, t.dial)
 	} else {
+		// Not clamped to MaxFragSize (T-081): that cut every datagram over ~1170 bytes
+		// in two even on a path that carries 1400. One that does not fit the path now
+		// comes back as DatagramTooLargeError and is fragmented then (packet.go).
 		maxUdpRelayPacketSize := option.MaxUdpRelayPacketSize
-		if maxUdpRelayPacketSize > tuic.MaxFragSizeV5 {
-			maxUdpRelayPacketSize = tuic.MaxFragSizeV5
-		}
 		clientOption := &tuic.ClientOptionV5{
 			Uuid:                  uuid.FromStringOrNil(option.UUID),
 			Password:              option.Password,
