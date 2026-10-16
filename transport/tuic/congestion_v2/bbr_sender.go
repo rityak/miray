@@ -51,6 +51,8 @@ const (
 	minRttExpiry = 10 * time.Second
 	// The minimum time the connection can spend in PROBE_RTT mode.
 	probeRttTime = 200 * time.Millisecond
+	// The share of the BDP kept in flight during PROBE_RTT (quiche kModerateProbeRttMultiplier).
+	moderateProbeRttMultiplier = 0.75
 	// If the bandwidth does not increase by the factor of |kStartupGrowthTarget|
 	// within |kRoundTripsWithoutGrowthBeforeExitingStartup| rounds, the connection
 	// will exit the STARTUP mode.
@@ -667,8 +669,12 @@ func (b *bbrSender) getTargetCongestionWindow(gain float64) congestion.ByteCount
 }
 
 // The target congestion window during PROBE_RTT.
+// probeRttCongestionWindow keeps 3/4 of the BDP in flight, as quiche does with
+// probe_rtt_based_on_bdp: the queue still drains for a min_rtt sample, but an
+// app-limited flow (a download under a game) no longer stalls for 200+ ms and
+// then pushes the backlog into the bottleneck queue for a second (T-069).
 func (b *bbrSender) probeRttCongestionWindow() congestion.ByteCount {
-	return b.minCongestionWindow
+	return b.getTargetCongestionWindow(moderateProbeRttMultiplier)
 }
 
 func (b *bbrSender) maybeUpdateMinRtt(now monotime.Time, sampleMinRtt time.Duration) bool {
