@@ -166,6 +166,15 @@ func (h *ListenerHandler) NewPacketConnection(ctx context.Context, conn network.
 		defer mutex.Unlock()
 		writer = nil
 	}()
+	// Per connection, not per datagram (T-078): the source, its SNAT key and the
+	// additions do not change while the connection lives.
+	rAddr := N.NewCustomAddr(h.Type.String(), connID, metadata.Source.UDPAddr()) // for tunnel's handleUDPConn
+	lAddr := conn.LocalAddr()
+	if inAddr := getInAddr(ctx); inAddr != nil {
+		lAddr = inAddr
+	}
+	rawSrc := rawUDPAddr(metadata.Source)
+	additions := getAdditions(ctx)
 	rwOptions := network.ReadWaitOptions{}
 	readWaiter, isReadWaiter := bufio.CreatePacketReadWaiter(conn)
 	if isReadWaiter {
@@ -196,16 +205,12 @@ func (h *ListenerHandler) NewPacketConnection(ctx context.Context, conn network.
 		cPacket := &packet{
 			writer: &writer,
 			mutex:  &mutex,
-			rAddr:  metadata.Source.UDPAddr(),
-			lAddr:  conn.LocalAddr(),
+			rAddr:  rAddr,
+			lAddr:  lAddr,
 			buff:   buff,
 			reply:  reply,
 		}
-		cPacket.rAddr = N.NewCustomAddr(h.Type.String(), connID, cPacket.rAddr) // for tunnel's handleUDPConn
-		if lAddr := getInAddr(ctx); lAddr != nil {
-			cPacket.lAddr = lAddr
-		}
-		h.handlePacket(ctx, cPacket, metadata.Source, dest)
+		h.handlePacket(cPacket, metadata.Source, dest, rawSrc, additions)
 	}
 	return nil
 }
@@ -245,23 +250,27 @@ func (h *ListenerHandler) NewPacket(ctx context.Context, key netip.AddrPort, buf
 	if conn, ok := common.Cast[localAddr](writer); ok { // tun does not have real inAddr
 		cPacket.lAddr = conn.LocalAddr()
 	}
-	h.handlePacket(ctx, cPacket, metadata.Source, metadata.Destination)
+	h.handlePacket(cPacket, metadata.Source, metadata.Destination, rawUDPAddr(metadata.Source), getAdditions(ctx))
 }
 
-func (h *ListenerHandler) handlePacket(ctx context.Context, cPacket *packet, source M.Socksaddr, destination M.Socksaddr) {
+// rawUDPAddr is the RawSrcAddr/RawDstAddr of a datagram: nil for a domain.
+func rawUDPAddr(addr M.Socksaddr) net.Addr {
+	if addr.IsIP() && addr.Fqdn == "" {
+		return addr.Unwrap().UDPAddr()
+	}
+	return nil
+}
+
+func (h *ListenerHandler) handlePacket(cPacket *packet, source M.Socksaddr, destination M.Socksaddr, rawSrc net.Addr, additions []inbound.Addition) {
 	cMetadata := &C.Metadata{
-		NetWork: C.UDP,
-		Type:    h.Type,
-	}
-	if source.IsIP() && source.Fqdn == "" {
-		cMetadata.RawSrcAddr = source.Unwrap().UDPAddr()
-	}
-	if destination.IsIP() && destination.Fqdn == "" {
-		cMetadata.RawDstAddr = destination.Unwrap().UDPAddr()
+		NetWork:    C.UDP,
+		Type:       h.Type,
+		RawSrcAddr: rawSrc,
+		RawDstAddr: rawUDPAddr(destination),
 	}
 	inbound.ApplyAdditions(cMetadata, inbound.WithDstAddr(destination), inbound.WithSrcAddr(source), inbound.WithInAddr(cPacket.InAddr()))
 	inbound.ApplyAdditions(cMetadata, h.Additions...)
-	inbound.ApplyAdditions(cMetadata, getAdditions(ctx)...)
+	inbound.ApplyAdditions(cMetadata, additions...)
 
 	h.Tunnel.HandleUDPPacket(cPacket, cMetadata)
 }
