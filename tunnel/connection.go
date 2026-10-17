@@ -422,11 +422,6 @@ func (c *udpActivityConn) WriteTo(b []byte, addr net.Addr) (int, error) {
 	return n, err
 }
 
-func isTimeout(err error) bool {
-	var netErr net.Error
-	return errors.As(err, &netErr) && netErr.Timeout()
-}
-
 func handleUDPToLocal(writeBack C.WriteBack, pc *udpActivityConn, sender C.PacketSender, key string, oAddrPort netip.AddrPort) {
 	defer func() {
 		sender.Close()
@@ -445,8 +440,26 @@ func handleUDPToLocal(writeBack C.WriteBack, pc *udpActivityConn, sender C.Packe
 		}
 	}()
 
-	lastRead := time.Now().UnixNano()
-	_ = pc.SetReadDeadline(time.Unix(0, lastRead).Add(udpTimeout))
+	// Idle sessions end by a timer that closes pc, not by a read deadline: most
+	// outbound conns sit behind common/net/deadline, which with a deadline set
+	// runs every read in a new goroutine whose stack grows each time (T-090:
+	// 12% of the client's CPU on UDP downloads). The timer moves on with activity
+	// in either direction (T-007).
+	var lastRead atomic.Int64
+	lastRead.Store(time.Now().UnixNano())
+	var idle atomic.Pointer[time.Timer]
+	idle.Store(time.AfterFunc(udpTimeout, func() {
+		last := lastRead.Load()
+		if w := pc.lastWrite.Load(); w > last {
+			last = w
+		}
+		if d := time.Until(time.Unix(0, last).Add(udpTimeout)); d > 0 {
+			idle.Load().Reset(d)
+			return
+		}
+		_ = pc.Close()
+	}))
+	defer func() { idle.Load().Stop() }()
 	for {
 		if held && buffered() == 0 {
 			held = false
@@ -459,20 +472,9 @@ func handleUDPToLocal(writeBack C.WriteBack, pc *udpActivityConn, sender C.Packe
 			if put != nil {
 				put() // a partial read can carry a buffer together with the error
 			}
-			if isTimeout(err) {
-				// the session is idle only if neither direction was active for udpTimeout
-				last := lastRead
-				if w := pc.lastWrite.Load(); w > last {
-					last = w
-				}
-				if next := time.Unix(0, last).Add(udpTimeout); next.After(time.Now()) {
-					_ = pc.SetReadDeadline(next)
-					continue
-				}
-			}
 			return
 		}
-		lastRead = time.Now().UnixNano()
+		lastRead.Store(time.Now().UnixNano())
 		if handicap.Packet(data) {
 			if put != nil {
 				put()
