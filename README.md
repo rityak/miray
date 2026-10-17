@@ -61,5 +61,7 @@ QUIC (hysteria2, tuic)
 - [rityak/utls](https://github.com/rityak/utls) — TLS-клиент
 - [rityak/smux](https://github.com/rityak/smux) — мультиплексор
 - [rityak/restls-client-go](https://github.com/rityak/restls-client-go) — restls
+- [rityak/sing-shadowsocks](https://github.com/rityak/sing-shadowsocks) — сервер Shadowsocks
+- [rityak/sing-shadowsocks2](https://github.com/rityak/sing-shadowsocks2) — клиент Shadowsocks
 
 В форках наш код лежит в ветке `miray`.
