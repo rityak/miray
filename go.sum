@@ -208,8 +208,8 @@ github.com/rityak/quic-go v0.61.1-0.20261016232823-f7eee93f4418 h1:1arWlrJeyAQaj
 github.com/rityak/quic-go v0.61.1-0.20261016232823-f7eee93f4418/go.mod h1:KTmibo7vZo0gCxdFWrPEQ/u/RGt92mJkrXDE2Qg2/AU=
 github.com/rityak/restls-client-go v0.0.0-20261015085035-a573679ec5c6 h1:VivLBgQMYjtPLzDpYkdQctxbPw0xNnN5sQweGlBAvws=
 github.com/rityak/restls-client-go v0.0.0-20261015085035-a573679ec5c6/go.mod h1:BN/U52vPw7j8VTSh2vleD/MnmVKCov84mS5VcjVHH4g=
-github.com/rityak/sing-quic v0.0.0-20261016235520-2aec9e62d884 h1:l+XLPNBp+3sW/29fsKz/fmnkwWg5HTKJaBJW877lB1A=
-github.com/rityak/sing-quic v0.0.0-20261016235520-2aec9e62d884/go.mod h1:6ayFGfzzBE85csgQkM3gf4neFq6s0losHlPRSxY+nuk=
+github.com/rityak/sing-quic v0.0.0-20261017005009-3a529b11ee19 h1:Z9VTmeCWemswM93X9cr5KTfU3UKSAFkgYIs+FUo4t88=
+github.com/rityak/sing-quic v0.0.0-20261017005009-3a529b11ee19/go.mod h1:6ayFGfzzBE85csgQkM3gf4neFq6s0losHlPRSxY+nuk=
 github.com/rityak/sing-tun v0.4.28-0.20261015223837-90325a2505d0 h1:0RKMZhFqgcSLdUSDj1edGDj7T/ODdtPfi/h698YAMS4=
 github.com/rityak/sing-tun v0.4.28-0.20261015223837-90325a2505d0/go.mod h1:5nlmrOy+FG0yhiLm+O/pzmirZVrpLuDQZuA+qI9x5kg=
 github.com/rityak/smux v0.0.0-20261015095034-a1787fab6ce4 h1:+fQVi8PW90SR1D5uu0SvLiUg1z6t8aFXaayy5ZrjorM=
