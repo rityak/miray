@@ -103,6 +103,28 @@ var pipeCases = []pipeCase{
 			return outbound.NewVless(o)
 		},
 	},
+	// VLESS is Platinum as a whole (D-008): the transports in use, not one of them
+	// REALITY keys come from init(), after this var is built: options are made on use
+	vlessCase("vless-reality-vision", true, func() (inbound.VlessOption, outbound.VlessOption) {
+		return inbound.VlessOption{RealityConfig: inbound.RealityConfig{
+				Dest: net.JoinHostPort(realityDest, "443"), PrivateKey: realityPrivateKey, ShortID: []string{realityShortid}, ServerNames: []string{realityDest},
+			}}, outbound.VlessOption{TLS: true, ServerName: realityDest, ClientFingerprint: "chrome", Flow: "xtls-rprx-vision",
+				RealityOpts: outbound.RealityOptions{PublicKey: realityPublickey, ShortID: realityShortid}}
+	}),
+	vlessCase("vless-ws", false, func() (inbound.VlessOption, outbound.VlessOption) {
+		return inbound.VlessOption{Certificate: tlsCertificate, PrivateKey: tlsPrivateKey, WsPath: "/ws"},
+			outbound.VlessOption{TLS: true, Fingerprint: tlsFingerprint, Network: "ws", WSOpts: outbound.WSOptions{Path: "/ws"}}
+	}),
+
+	vlessCase("vless-grpc", false, func() (inbound.VlessOption, outbound.VlessOption) {
+		return inbound.VlessOption{Certificate: tlsCertificate, PrivateKey: tlsPrivateKey, GrpcServiceName: "GunService"},
+			outbound.VlessOption{TLS: true, Fingerprint: tlsFingerprint, Network: "grpc", GrpcOpts: outbound.GrpcOptions{GrpcServiceName: "GunService"}}
+	}),
+
+	xhttpCase("auto"),
+	xhttpCase("stream-one"),
+	xhttpCase("stream-up"),
+	xhttpCase("packet-up"),
 	{
 		name: "hy2", udp: true,
 		in: func(port string) (pipeServer, error) {
@@ -159,6 +181,33 @@ var pipeCases = []pipeCase{
 	trustTunnelCase("trusttunnel-quic", true),
 }
 
+func vlessCase(name string, udp bool, options func() (inbound.VlessOption, outbound.VlessOption)) pipeCase {
+	return pipeCase{
+		name: name, udp: udp,
+		in: func(port string) (pipeServer, error) {
+			o, _ := options()
+			o.BaseOption = base("vless", port)
+			o.Users = []inbound.VlessUser{{Username: "u", UUID: userUUID, Flow: "xtls-rprx-vision"}}
+			return inbound.NewVless(&o)
+		},
+		out: func(a netip.AddrPort, t *TestTunnel) (C.ProxyAdapter, error) {
+			_, o := options()
+			o.Name, o.Server, o.Port, o.UUID, o.UDP = "vless", a.Addr().String(), int(a.Port()), userUUID, udp
+			o.DialerForAPI, o.TunnelForAPI = t.NewDialer(), t
+			return outbound.NewVless(o)
+		},
+	}
+}
+
+func xhttpCase(mode string) pipeCase {
+	return vlessCase("vless-xhttp-"+mode, false, func() (inbound.VlessOption, outbound.VlessOption) {
+		return inbound.VlessOption{Certificate: tlsCertificate, PrivateKey: tlsPrivateKey,
+				XHTTPConfig: inbound.XHTTPConfig{Path: "/vless-xhttp", Host: "example.com", Mode: mode}},
+			outbound.VlessOption{TLS: true, Fingerprint: tlsFingerprint, ServerName: "example.org", ClientFingerprint: "chrome", Network: "xhttp",
+				XHTTPOpts: outbound.XHTTPOptions{Path: "/vless-xhttp", Host: "example.com", Mode: mode}}
+	})
+}
+
 func trustTunnelCase(name string, quic bool) pipeCase {
 	return pipeCase{
 		name: name, udp: true,
@@ -210,7 +259,12 @@ func benchPipeTCP(b *testing.B, c pipeCase, down bool) {
 	tunnel := NewHttpTestTunnel()
 	b.Cleanup(func() { tunnel.Close() })
 	done := make(chan int64, 1)
-	tunnel.HandleTCPConnFn = func(conn net.Conn, _ *C.Metadata) {
+	camouflage := tunnel.HandleTCPConnFn // the REALITY server dials its dest through the tunnel
+	tunnel.HandleTCPConnFn = func(conn net.Conn, metadata *C.Metadata) {
+		if metadata.Host == realityDest {
+			camouflage(conn, metadata)
+			return
+		}
 		defer conn.Close()
 		if !down {
 			n, _ := io.Copy(io.Discard, conn)
