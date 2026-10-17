@@ -162,4 +162,4 @@ replace github.com/metacubex/utls => github.com/rityak/utls v0.0.0-2026101510421
 
 replace github.com/metacubex/quic-go => github.com/rityak/quic-go v0.61.1-0.20261016232823-f7eee93f4418
 
-replace github.com/metacubex/sing-quic => github.com/rityak/sing-quic v0.0.0-20261016235520-2aec9e62d884
+replace github.com/metacubex/sing-quic => github.com/rityak/sing-quic v0.0.0-20261017005009-3a529b11ee19
