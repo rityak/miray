@@ -1062,6 +1062,11 @@ proxies: # socks5
       # uplink-chunk-size: 0 # only applicable when uplink-data-placement is not body
       # sc-max-each-post-bytes: 1000000
       # sc-min-posts-interval-ms: 30
+      # miray: packet-up (and auto over TLS) uploads one post at a time, so upload is capped at about
+      # sc-max-each-post-bytes / (sc-min-posts-interval-ms + RTT): defaults (same as Xray) give ~33 MB/s at best.
+      # To go faster, lower sc-min-posts-interval-ms (client-only, e.g. "10-20"; more requests per second)
+      # or raise sc-max-each-post-bytes, but only up to the server's value: the server rejects larger posts.
+      # Or use stream-up / stream-one, which have no such cap.
       # reuse-settings: # aka XMUX
       #   max-concurrency: "16-32"
       #   max-connections: "0"
@@ -2443,7 +2448,7 @@ listeners:
     #   uplink-chunk-size: 0 # only applicable when uplink-data-placement is not body
     #   sc-max-buffered-posts: 30
     #   sc-stream-up-server-secs: "20-80"
-    #   sc-max-each-post-bytes: 1000000
+    #   sc-max-each-post-bytes: 1000000 # miray: clients may send posts up to this size; raise it together with the clients' value
     # -------------------------
     # vless encryption服务端配置：
     # （原生外观 / 只 XOR 公钥 / 全随机数。1-RTT 每次下发随机 300 到 600 秒的 ticket 以便 0-RTT 复用 / 只允许 1-RTT）
