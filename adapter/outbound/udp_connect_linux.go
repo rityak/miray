@@ -45,7 +45,7 @@ func connectUDP(pc net.PacketConn, addr net.Addr) net.PacketConn {
 	if err := rc.Control(func(fd uintptr) { connectErr = unix.Connect(int(fd), sa) }); err != nil || connectErr != nil {
 		return pc
 	}
-	return &connectedUDPConn{UDPConn: udp, reader: packet.NewEnhancePacketConn(udp)}
+	return &connectedUDPConn{UDPConn: udp, reader: packet.NewConnectedEnhancePacketConn(udp, server)}
 }
 
 // connectedUDPConn sends every datagram to the connected server. While corked

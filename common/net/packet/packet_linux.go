@@ -5,8 +5,10 @@ package packet
 import (
 	"errors"
 	"net"
+	"os"
 	"sync"
 	"syscall"
+	"unsafe"
 
 	"github.com/metacubex/mihomo/common/pool"
 
@@ -33,10 +35,35 @@ type enhanceUDPConn struct {
 	msgs  []ipv4.Message
 	size  int // buffers offered to the next recvmmsg
 	queue []ipv4.Message
+
+	// a connected socket (T-096) reads with its own recvmmsg, without source addresses
+	remote net.Addr
+	iovs   []unix.Iovec
+	hdrs   []mmsghdr
+	readFn func(fd uintptr) bool // recvConnected, made once: a closure per read allocated
+	rn     int
+	rerr   error
+}
+
+// mmsghdr is struct mmsghdr of recvmmsg(2); Go pads it as C does on 32 and 64 bits.
+type mmsghdr struct {
+	hdr unix.Msghdr
+	len uint32
+}
+
+// NewConnectedEnhancePacketConn is NewEnhancePacketConn for a socket connected to remote:
+// every datagram comes from remote, so it is not parsed per datagram (T-096).
+func NewConnectedEnhancePacketConn(udp *net.UDPConn, remote net.Addr) EnhancePacketConn {
+	return &enhanceUDPConn{UDPConn: udp, remote: remote}
 }
 
 func (c *enhanceUDPConn) init() {
 	c.rawConn, _ = c.UDPConn.SyscallConn()
+	if c.remote != nil {
+		c.iovs = make([]unix.Iovec, maxReadBatch)
+		c.hdrs = make([]mmsghdr, maxReadBatch)
+		c.readFn = c.recvConnected
+	}
 	if la, ok := c.UDPConn.LocalAddr().(*net.UDPAddr); ok && la.IP.To4() != nil {
 		c.v4 = ipv4.NewPacketConn(c.UDPConn)
 	} else {
@@ -76,6 +103,9 @@ func (c *enhanceUDPConn) Buffered() int {
 // readBatch fills the queue with at least one datagram, waiting for the socket
 // to become readable without holding buffers.
 func (c *enhanceUDPConn) readBatch() error {
+	if c.remote != nil {
+		return c.readConnected()
+	}
 	for {
 		ms := c.msgs[:c.size]
 		for i := range ms {
@@ -114,6 +144,69 @@ func (c *enhanceUDPConn) readBatch() error {
 			return err
 		}
 	}
+}
+
+// readConnected is readBatch for a connected socket, done as sing does it
+// (sing/common/bufio/packet_batch_mmsg.go): recvmmsg straight from the poller's
+// callback, headers kept across calls, no names. Through x/net every call packed
+// all slots and parsed and allocated an address per datagram, which at 50 Mbit/s
+// cost more than the batch saved (T-096). Buffers are still taken only while the
+// socket has data.
+func (c *enhanceUDPConn) readConnected() error {
+	c.rn, c.rerr = 0, nil
+	if err := c.rawConn.Read(c.readFn); err != nil {
+		return err
+	}
+	if c.rerr != nil {
+		return c.rerr
+	}
+	n := c.rn
+	for i := 0; i < n; i++ {
+		c.msgs[i].N = int(c.hdrs[i].len)
+		c.msgs[i].Addr = c.remote
+	}
+	c.queue = append(c.queue[:0], c.msgs[:n]...)
+	if c.size = 2 * n; c.size > maxReadBatch {
+		c.size = maxReadBatch
+	}
+	return nil
+}
+
+// recvConnected is the poller callback of readConnected: false waits for readability.
+func (c *enhanceUDPConn) recvConnected(fd uintptr) bool {
+	ms := c.msgs[:c.size]
+	for i := range ms {
+		b := pool.Get(pool.UDPBufferSize)
+		ms[i].Buffers[0] = b
+		c.iovs[i].Base = &b[0]
+		c.iovs[i].SetLen(len(b))
+		c.hdrs[i] = mmsghdr{}
+		c.hdrs[i].hdr.Iov = &c.iovs[i]
+		c.hdrs[i].hdr.SetIovlen(1)
+	}
+	var r uintptr
+	var errno syscall.Errno
+	for {
+		r, _, errno = unix.Syscall6(unix.SYS_RECVMMSG, fd, uintptr(unsafe.Pointer(&c.hdrs[0])), uintptr(len(ms)), unix.MSG_DONTWAIT, 0, 0)
+		if errno != unix.EINTR {
+			break
+		}
+	}
+	n := 0
+	if errno == 0 {
+		n = int(r)
+	}
+	for i := n; i < len(ms); i++ {
+		_ = pool.Put(ms[i].Buffers[0])
+	}
+	if errno == unix.EAGAIN || errno == unix.EWOULDBLOCK || (errno == 0 && n == 0) {
+		return false // wait for readability, honouring the read deadline
+	}
+	if errno != 0 {
+		c.rerr = os.NewSyscallError("recvmmsg", errno)
+	}
+	c.rn = n
+	return true
 }
 
 // ReadFrom goes through the same queue, so it never skips datagrams already read.

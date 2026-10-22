@@ -22,6 +22,7 @@ type NetPacketConn struct {
 	pipeDeadline PipeDeadline
 	disablePipe  atomic.Bool
 	inRead       atomic.Bool
+	deadlineUsed atomic.Bool // SetReadDeadline was called: until then no pipe read can exist (T-096)
 	resultCh     chan any
 }
 
@@ -115,6 +116,7 @@ func (c *NetPacketConn) pipeReadFrom(size int) {
 }
 
 func (c *NetPacketConn) SetReadDeadline(t time.Time) error {
+	c.deadlineUsed.Store(true) // before the inRead check: a direct read in flight is then seen below
 	if c.disablePipe.Load() {
 		return c.PacketConn.SetReadDeadline(t)
 	} else if c.inRead.Load() {
