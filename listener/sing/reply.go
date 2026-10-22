@@ -3,6 +3,7 @@ package sing
 import (
 	"context"
 	"net"
+	"net/netip"
 	"sync"
 
 	"github.com/metacubex/sing/common/buf"
@@ -40,13 +41,17 @@ func (c *ReplyConn) ReadPacket(buffer *buf.Buffer) (M.Socksaddr, error) {
 
 func (c *ReplyConn) WritePacket(buffer *buf.Buffer, destination M.Socksaddr) error {
 	defer buffer.Release()
-	dst := destination.AddrPort()
+	return c.WriteReply(buffer.Bytes(), destination.AddrPort())
+}
+
+// WriteReply sends b to dst, or collects a copy of it while a session holds.
+func (c *ReplyConn) WriteReply(b []byte, dst netip.AddrPort) error {
 	c.mu.Lock()
 	if c.hold > 0 {
 		if c.n == len(c.datas) {
 			c.datas, c.addrs = append(c.datas, nil), append(c.addrs, nil)
 		}
-		c.datas[c.n] = append(c.datas[c.n][:0], buffer.Bytes()...)
+		c.datas[c.n] = append(c.datas[c.n][:0], b...)
 		// one *net.UDPAddr per run of a client: the batch writer groups GSO runs by pointer
 		if c.n > 0 && c.addrs[c.n-1].AddrPort() == dst {
 			c.addrs[c.n] = c.addrs[c.n-1]
@@ -58,7 +63,7 @@ func (c *ReplyConn) WritePacket(buffer *buf.Buffer, destination M.Socksaddr) err
 		return nil
 	}
 	c.mu.Unlock()
-	_, err := c.WriteToUDPAddrPort(buffer.Bytes(), dst)
+	_, err := c.WriteToUDPAddrPort(b, dst)
 	return err
 }
 

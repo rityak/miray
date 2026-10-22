@@ -77,6 +77,15 @@ func (c *connectedUDPConn) WriteTo(b []byte, _ net.Addr) (int, error) {
 
 func (c *connectedUDPConn) ReadFrom(p []byte) (int, net.Addr, error) { return c.reader.ReadFrom(p) }
 
+// Buffered reports the replies already read ahead by recvmmsg, so tunnel can send
+// the replies of a drained batch to the local client in one go (T-095).
+func (c *connectedUDPConn) Buffered() int {
+	if b, ok := c.reader.(interface{ Buffered() int }); ok {
+		return b.Buffered()
+	}
+	return 0
+}
+
 // Cork starts collecting the datagrams written.
 func (c *connectedUDPConn) Cork() {
 	c.mu.Lock()
