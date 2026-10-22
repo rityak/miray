@@ -58,3 +58,55 @@ func TestEnhanceUDPConnBatch(t *testing.T) {
 		t.Fatalf("idle read: %v, want a deadline error", err)
 	}
 }
+
+// The connected socket reads its own recvmmsg (T-096): same order, sizes, batching and deadline,
+// and every datagram is reported as coming from the connected server.
+func TestEnhanceUDPConnConnected(t *testing.T) {
+	server, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer server.Close()
+	udp, err := net.DialUDP("udp", nil, server.LocalAddr().(*net.UDPAddr))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer udp.Close()
+	remote := server.LocalAddr()
+	c := NewConnectedEnhancePacketConn(udp, remote).(*enhanceUDPConn)
+	client := udp.LocalAddr()
+	_ = c.SetReadDeadline(time.Now().Add(2 * time.Second))
+
+	_, _ = server.WriteTo([]byte{9}, client)
+	data, put, addr, err := c.WaitReadFrom()
+	if err != nil || len(data) != 1 || data[0] != 9 || addr != remote {
+		t.Fatalf("sparse read: %v %v %v", data, addr, err)
+	}
+	put()
+
+	const count = 30
+	for i := 0; i < count; i++ {
+		_, _ = server.WriteTo(make([]byte, 10+i), client)
+	}
+	time.Sleep(50 * time.Millisecond)
+	batched := false
+	for i := 0; i < count; i++ {
+		data, put, _, err := c.WaitReadFrom()
+		if err != nil {
+			t.Fatalf("datagram %d: %v", i, err)
+		}
+		if len(data) != 10+i {
+			t.Fatalf("datagram %d has %d bytes, want %d", i, len(data), 10+i)
+		}
+		put()
+		batched = batched || len(c.queue) > 0
+	}
+	if !batched {
+		t.Fatal("queued datagrams were read one per syscall")
+	}
+
+	_ = c.SetReadDeadline(time.Now().Add(50 * time.Millisecond))
+	if _, _, _, err := c.WaitReadFrom(); !errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatalf("idle read: %v, want a deadline error", err)
+	}
+}

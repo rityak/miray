@@ -32,6 +32,19 @@ type enhancePacketConn struct {
 }
 
 func (c *enhancePacketConn) WaitReadFrom() (data []byte, put func(), addr net.Addr, err error) {
+	// No read deadline was ever set, so there is no pipe read or cached result: read directly,
+	// without the select and the token round trip below, which a UDP relay paid per datagram
+	// (T-096). inRead is set before the second check, so a concurrent SetReadDeadline either
+	// is seen here or sees the read in flight and takes the native path, as for the zero deadline.
+	if !c.netPacketConn.deadlineUsed.Load() {
+		c.netPacketConn.inRead.Store(true)
+		if !c.netPacketConn.deadlineUsed.Load() {
+			data, put, addr, err = c.enhancePacketConn.WaitReadFrom()
+			c.netPacketConn.inRead.Store(false)
+			return
+		}
+		c.netPacketConn.inRead.Store(false)
+	}
 FOR:
 	for {
 		select {
