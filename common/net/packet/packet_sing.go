@@ -2,6 +2,7 @@ package packet
 
 import (
 	"net"
+	"sync/atomic"
 
 	"github.com/metacubex/sing/common/buf"
 	"github.com/metacubex/sing/common/bufio"
@@ -19,6 +20,13 @@ type EnhanceSingPacketConn interface {
 type enhanceSingPacketConn struct {
 	SingPacketConn
 	packetReadWaiter N.PacketReadWaiter
+	lastAddr         atomic.Pointer[cachedUDPAddr]
+}
+
+// cachedUDPAddr is the *net.UDPAddr last made for a source; it is never mutated (T-096).
+type cachedUDPAddr struct {
+	dest M.Socksaddr
+	addr *net.UDPAddr
 }
 
 func (c *enhanceSingPacketConn) WaitReadFrom() (data []byte, put func(), addr net.Addr, err error) {
@@ -37,8 +45,12 @@ func (c *enhanceSingPacketConn) WaitReadFrom() (data []byte, put func(), addr ne
 	}
 	if dest.IsFqdn() {
 		addr = dest
+	} else if last := c.lastAddr.Load(); last != nil && last.dest == dest {
+		addr = last.addr // a session's datagrams nearly always come from one source (T-096)
 	} else {
-		addr = dest.UDPAddr()
+		a := dest.UDPAddr()
+		c.lastAddr.Store(&cachedUDPAddr{dest: dest, addr: a})
+		addr = a
 	}
 	if err != nil {
 		buff.Release()

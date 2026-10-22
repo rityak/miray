@@ -460,6 +460,11 @@ func handleUDPToLocal(writeBack C.WriteBack, pc *udpActivityConn, sender C.Packe
 		_ = pc.Close()
 	}))
 	defer func() { idle.Load().Stop() }()
+	// replies of a session nearly always come from one address: reuse its *net.UDPAddr
+	// instead of two allocations per datagram (T-096); it is never mutated, so a writer
+	// that keeps it, like a held reply batch, still sees the address it was given
+	var lastFrom netip.AddrPort
+	var lastFromAddr *net.UDPAddr
 	for {
 		if held && buffered() == 0 {
 			held = false
@@ -503,7 +508,10 @@ func handleUDPToLocal(writeBack C.WriteBack, pc *udpActivityConn, sender C.Packe
 			reply.Hold()
 			held = true
 		}
-		_, err = writeBack.WriteBack(data, net.UDPAddrFromAddrPort(fromAddrPort))
+		if lastFromAddr == nil || fromAddrPort != lastFrom {
+			lastFrom, lastFromAddr = fromAddrPort, net.UDPAddrFromAddrPort(fromAddrPort)
+		}
+		_, err = writeBack.WriteBack(data, lastFromAddr)
 		if put != nil {
 			put()
 		}
