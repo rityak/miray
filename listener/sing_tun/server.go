@@ -191,7 +191,7 @@ func New(options LC.Tun, tunnel C.Tunnel, additions ...inbound.Addition) (l *Lis
 	})
 	tunMTU := options.MTU
 	if tunMTU == 0 {
-		tunMTU = 9000
+		tunMTU = defaultTunMTU(options.Stack, runtime.GOOS)
 	}
 	var udpTimeout time.Duration
 	if options.UDPTimeout != 0 {
@@ -478,14 +478,7 @@ func New(options LC.Tun, tunnel C.Tunnel, additions ...inbound.Addition) (l *Lis
 		err = E.Cause(err, "build android rules")
 		return
 	}
-	tunIf, err := tunNew(tunOptions)
-	if err != nil && tunOptions.GSO {
-		// gso is on by default on Linux (D-002); an environment without
-		// IFF_VNET_HDR support must still get a working TUN.
-		log.Warnln("[TUN] open with gso failed, retrying without gso: %v", err)
-		tunOptions.GSO = false
-		tunIf, err = tunNew(tunOptions)
-	}
+	tunIf, tunOptions, err := openTun(tunOptions, options.MTU == 0, tunNew)
 	if err != nil {
 		err = E.Cause(err, "configure tun interface")
 		return
@@ -552,7 +545,7 @@ func New(options LC.Tun, tunnel C.Tunnel, additions ...inbound.Addition) (l *Lis
 		tunName = fmt.Sprintf("%s(fd=%d)", tunName, options.FileDescriptor)
 	}
 	l.addrStr = fmt.Sprintf("%s(%s,%s), mtu: %d, auto route: %v, auto redir: %v, ip stack: %s",
-		tunName, tunOptions.Inet4Address, tunOptions.Inet6Address, tunMTU, options.AutoRoute, options.AutoRedirect, options.Stack)
+		tunName, tunOptions.Inet4Address, tunOptions.Inet6Address, tunOptions.MTU, options.AutoRoute, options.AutoRedirect, options.Stack)
 	return
 }
 
@@ -714,4 +707,31 @@ func (l *Listener) Config() LC.Tun {
 
 func (l *Listener) Address() string {
 	return l.addrStr
+}
+
+// defaultTunMTU is the MTU when the config sets none: 65535 on Linux with the system
+// stack, as in sing-box (TCP x1.7-2.6, half the CPU per GB: D-005, S-010); 9000 elsewhere,
+// where mips and gvisor gain nothing from it and Android reports ENOBUFS.
+func defaultTunMTU(stack C.TUNStack, goos string) uint32 {
+	if goos == "linux" && stack == C.TunSystem {
+		return 65535
+	}
+	return 9000
+}
+
+// openTun opens the TUN; when a default the environment rejects is in the way, it retries
+// without it: gso (on by default on Linux, D-002, T-017), then the default MTU above 9000 (D-005).
+func openTun(options tun.Options, defaultMTU bool, open func(tun.Options) (tun.Tun, error)) (tun.Tun, tun.Options, error) {
+	tunIf, err := open(options)
+	if err != nil && options.GSO {
+		log.Warnln("[TUN] open with gso failed, retrying without gso: %v", err)
+		options.GSO = false
+		tunIf, err = open(options)
+	}
+	if err != nil && defaultMTU && options.MTU > 9000 {
+		log.Warnln("[TUN] open with mtu %d failed, retrying with 9000: %v", options.MTU, err)
+		options.MTU = 9000
+		tunIf, err = open(options)
+	}
+	return tunIf, options, err
 }
