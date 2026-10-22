@@ -9,6 +9,7 @@ import (
 	N "github.com/metacubex/mihomo/common/net"
 	"github.com/metacubex/mihomo/common/pool"
 	C "github.com/metacubex/mihomo/constant"
+	"github.com/metacubex/mihomo/listener/sing"
 	"github.com/metacubex/mihomo/transport/socks5"
 )
 
@@ -17,6 +18,7 @@ const udpReadBatch = 16
 
 type PacketConn struct {
 	conn   net.PacketConn
+	reply  *sing.ReplyConn
 	addr   string
 	target socks5.Addr
 	proxy  string
@@ -54,6 +56,10 @@ func NewUDP(addr, target, proxy string, lc C.InboundListenConfig, tunnel C.Tunne
 		target: targetAddr,
 		proxy:  proxy,
 		addr:   addr,
+	}
+
+	if udp, ok := l.(*net.UDPConn); ok { // replies go out in batches, as in sing-box (T-095)
+		sl.reply = sing.NewReplyConn(udp)
 	}
 
 	if proxy != "" {
@@ -97,6 +103,7 @@ func NewUDP(addr, target, proxy string, lc C.InboundListenConfig, tunnel C.Tunne
 func (l *PacketConn) handleUDP(pc net.PacketConn, tunnel C.Tunnel, buf []byte, addr net.Addr, additions ...inbound.Addition) {
 	cPacket := &packet{
 		pc:      pc,
+		reply:   l.reply,
 		rAddr:   addr,
 		payload: buf,
 	}
