@@ -32,6 +32,7 @@ import (
 	"github.com/metacubex/mihomo/log"
 	"github.com/metacubex/mihomo/tunnel/statistic"
 
+	"github.com/metacubex/sing/common/network"
 	"golang.org/x/exp/slices"
 )
 
@@ -819,6 +820,15 @@ func handleTCPConn(connCtx C.ConnContext) {
 		logMetadataErr(metadata, rule, proxy, err)
 	})
 	if err != nil {
+		// inbounds with a deferred response (hysteria2) send the failure to the client (T-102)
+		_ = network.ReportHandshakeFailure(conn, err)
+		return
+	}
+	// ... and the success now, as sing-box does after the dial: the official hysteria
+	// client waits for it before sending anything, so a client-first stream stalled
+	// until the destination spoke (T-102)
+	if err = network.ReportHandshakeSuccess(conn); err != nil {
+		_ = remoteConn.Close()
 		return
 	}
 	logMetadata(metadata, rule, remoteConn)
