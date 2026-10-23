@@ -89,6 +89,12 @@ func (vc *Conn) ReadBuffer(buffer *buf.Buffer) error {
 			vc.readRemainingBuffer = readBuffer
 		}
 		n, err := vc.ExtendedReader.Read(readBuffer.FreeBytes()[:readSize])
+		if n > 0 && err == io.EOF {
+			// ReadBuffer never returns data with an error, or the copy loop drops it: TLS
+			// returns the last bytes together with EOF when a close_notify follows them, and
+			// a short reply closed at once was lost (T-104). The next read returns the EOF.
+			err = nil
+		}
 		readBuffer.Truncate(n)
 		vc.readRemainingContent -= n
 		vc.FilterTLS(readBuffer.Bytes())

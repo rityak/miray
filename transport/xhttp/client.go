@@ -151,7 +151,9 @@ func (c *PacketUpWriter) Close() error {
 	case <-time.After(time.Second):
 	}
 	c.cancel()
-	httputils.CloseTransport(c.transport)
+	// the transport is not closed here: the download shares it, and resetting the GET
+	// with the session made an Xray server drop the upload it had not forwarded yet;
+	// Conn closes it after the linger (T-103)
 	return nil
 }
 
@@ -671,7 +673,7 @@ func (c *Client) DialPacketUp(ctx context.Context) (net.Conn, error) {
 
 	conn.reader = wrc
 	conn.onClose = func() {
-		// uploadTransport already closed by writer
+		httputils.CloseTransport(uploadTransport)
 		httputils.CloseTransport(downloadTransport)
 		reqCancel()
 	}
