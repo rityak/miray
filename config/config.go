@@ -22,6 +22,7 @@ import (
 	"github.com/metacubex/mihomo/common/yaml"
 	"github.com/metacubex/mihomo/component/age"
 	"github.com/metacubex/mihomo/component/auth"
+	"github.com/metacubex/mihomo/component/ca"
 	"github.com/metacubex/mihomo/component/cidr"
 	"github.com/metacubex/mihomo/component/fakeip"
 	"github.com/metacubex/mihomo/component/geodata"
@@ -680,6 +681,10 @@ func ParseRawConfig(rawCfg *RawConfig) (*Config, error) {
 	}
 	config.TLS = tlsCfg
 
+	// hysteria2, tuic, and http/socks5 over TLS take the trusted roots when they are created:
+	// the custom certificates go into the pool before the proxies (T-115)
+	applyCustomTrustCert(tlsCfg.CustomTrustCert)
+
 	proxies, providers, err := parseProxies(rawCfg)
 	if err != nil {
 		return nil, err
@@ -880,6 +885,15 @@ func parseTLS(cfg *RawConfig) (*TLS, error) {
 		EchKey:          cfg.TLS.EchKey,
 		CustomTrustCert: cfg.TLS.CustomTrustCert,
 	}, nil
+}
+
+func applyCustomTrustCert(certs []string) {
+	ca.ResetCertificate()
+	for _, c := range certs {
+		if err := ca.AddCertificate(c); err != nil {
+			log.Warnln("%s\nadd error: %s", c, err.Error())
+		}
+	}
 }
 
 func parseProxies(cfg *RawConfig) (proxies map[string]C.Proxy, providersMap map[string]P.ProxyProvider, err error) {

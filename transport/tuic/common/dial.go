@@ -34,6 +34,7 @@ func DialQuic(ctx context.Context, address string, opts []dialer.Option, pDialer
 			if err != nil {
 				return nil, err
 			}
+			enableICMPErrors(packetConn)
 			transport := quic.Transport{
 				Conn:               packetConn,
 				ConnectionIDLength: option.ConnectionIDLength,
