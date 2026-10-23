@@ -202,6 +202,8 @@ github.com/rityak/mipstack v0.0.0-20261022093111-b4f777a886ca h1:BUdtvFt/NyOtPbS
 github.com/rityak/mipstack v0.0.0-20261022093111-b4f777a886ca/go.mod h1:+bbwALZI0pbi2auSG5A3ptdpV2DZ2eLObziXo+P7oj0=
 github.com/rityak/quic-go v0.61.1-0.20261022033317-da0c80b4f081 h1:NnU15wicxWYa0mTdKGCBSS0535U9/Qyy4DgosfRjlRo=
 github.com/rityak/quic-go v0.61.1-0.20261022033317-da0c80b4f081/go.mod h1:KTmibo7vZo0gCxdFWrPEQ/u/RGt92mJkrXDE2Qg2/AU=
+github.com/rityak/quic-go v0.61.1-0.20261023103801-73103c651833 h1:BpDfWaX0IoPJxPwbO66z+40jyphe8cI0E6oiXuVk0G8=
+github.com/rityak/quic-go v0.61.1-0.20261023103801-73103c651833/go.mod h1:KTmibo7vZo0gCxdFWrPEQ/u/RGt92mJkrXDE2Qg2/AU=
 github.com/rityak/restls-client-go v0.0.0-20261015085035-a573679ec5c6 h1:VivLBgQMYjtPLzDpYkdQctxbPw0xNnN5sQweGlBAvws=
 github.com/rityak/restls-client-go v0.0.0-20261015085035-a573679ec5c6/go.mod h1:BN/U52vPw7j8VTSh2vleD/MnmVKCov84mS5VcjVHH4g=
 github.com/rityak/sing-quic v0.0.0-20261023015622-972568759b12 h1:P85nNIENykMUP/f413Xekivoib1lFLeHKZykrqdHTcE=
