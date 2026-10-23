@@ -148,13 +148,14 @@ func TestTLSAuthDigestMismatchIsRejected(t *testing.T) {
 }
 
 func TestTLSAuthDefaultAndUnsupportedDigest(t *testing.T) {
-	// An empty auth follows the config default (SHA256), like the data channel.
+	// An empty auth is OpenVPN's default, SHA1: a server without "auth" in its
+	// config expects a 20-byte tag (T-114).
 	client, err := NewTLSAuth(testStaticKey(), "1", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if client.TagSize() != sha256.Size {
-		t.Fatalf("default tag size %d, want %d", client.TagSize(), sha256.Size)
+	if client.TagSize() != sha1.Size {
+		t.Fatalf("default tag size %d, want %d", client.TagSize(), sha1.Size)
 	}
 	if _, err := NewTLSAuth(testStaticKey(), "1", "SHA224"); err == nil {
 		t.Fatal("unsupported digest must be refused at construction")

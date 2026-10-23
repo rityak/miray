@@ -207,7 +207,9 @@ func normalizeCipher(cipher string) string {
 func normalizeAuth(auth string) string {
 	switch strings.ToUpper(strings.TrimSpace(auth)) {
 	case "":
-		return AuthSHA256
+		// OpenVPN's default --auth (openvpn --help: "default=SHA1"); tls-auth and
+		// non-AEAD data ciphers fail against a server without an explicit auth otherwise.
+		return AuthSHA1
 	case "SHA-1":
 		return AuthSHA1
 	default:
