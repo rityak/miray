@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"net"
+	"sync"
 	"time"
 
 	"github.com/metacubex/mihomo/adapter/inbound"
@@ -41,6 +42,9 @@ type Server struct {
 	optionV4 *v4.ServerOption
 	optionV5 *v5.ServerOption
 	listener *quic.EarlyListener
+
+	activeAccess sync.Mutex
+	activeConns  map[*quic.Conn]struct{}
 }
 
 func (s *Server) Serve() error {
@@ -61,12 +65,41 @@ func (s *Server) Serve() error {
 		if h.optionV5 != nil {
 			h.v5Handler = v5.NewServerHandler(h.optionV5, conn, h.uuid)
 		}
+		s.activeAccess.Lock()
+		if s.activeConns == nil {
+			s.activeConns = make(map[*quic.Conn]struct{})
+		}
+		s.activeConns[conn] = struct{}{}
+		s.activeAccess.Unlock()
+		go func() { // handle only starts the connection's loops: it is done when the connection is
+			<-conn.Context().Done()
+			s.activeAccess.Lock()
+			delete(s.activeConns, conn)
+			s.activeAccess.Unlock()
+		}()
 		go h.handle()
 	}
 }
 
+// Close stops accepting and closes the accepted connections with CONNECTION_CLOSE (T-119),
+// as sing-box does on shutdown: closing the listener alone leaves them to the client's
+// idle timeout once the socket is gone.
 func (s *Server) Close() error {
-	return s.listener.Close()
+	err := s.listener.Close()
+	s.activeAccess.Lock()
+	conns := s.activeConns
+	s.activeConns = nil
+	s.activeAccess.Unlock()
+	var wg sync.WaitGroup
+	for conn := range conns {
+		wg.Add(1)
+		go func(conn *quic.Conn) {
+			defer wg.Done()
+			_ = conn.CloseWithError(0, "")
+		}(conn)
+	}
+	wg.Wait()
+	return err
 }
 
 type serverHandler struct {
