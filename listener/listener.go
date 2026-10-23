@@ -724,6 +724,15 @@ func closeTunListener() {
 	}
 }
 
+// Cleanup runs on shutdown. The inbound listeners close too (T-119): QUIC inbounds then
+// close their connections with CONNECTION_CLOSE, as sing-box does, instead of leaving
+// clients to their idle timeout.
 func Cleanup() {
 	closeTunListener()
+	inboundMux.Lock()
+	defer inboundMux.Unlock()
+	for name, l := range inboundListeners {
+		_ = l.Close()
+		delete(inboundListeners, name)
+	}
 }

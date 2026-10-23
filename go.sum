@@ -210,6 +210,8 @@ github.com/rityak/sing v0.5.9-0.20261023162138-c1130d526453 h1:xMF0SMTCfxwiIFV78
 github.com/rityak/sing v0.5.9-0.20261023162138-c1130d526453/go.mod h1:ypf0mjwlZm0sKdQSY+yQvmsbWa0hNPtkeqyRMGgoN+w=
 github.com/rityak/sing-quic v0.0.0-20261023053934-c54fce6193d0 h1:xlgCLYoQpSc9ino8ndR/65hvdQMs1xFYeHOe3yX/AHw=
 github.com/rityak/sing-quic v0.0.0-20261023053934-c54fce6193d0/go.mod h1:6ayFGfzzBE85csgQkM3gf4neFq6s0losHlPRSxY+nuk=
+github.com/rityak/sing-quic v0.0.0-20261023165038-064068505917 h1:3558zzVGFzK2zecA0DU1VGH1kVxcdQUsYjCzeUe+TY8=
+github.com/rityak/sing-quic v0.0.0-20261023165038-064068505917/go.mod h1:6ayFGfzzBE85csgQkM3gf4neFq6s0losHlPRSxY+nuk=
 github.com/rityak/sing-shadowsocks v0.2.14-0.20261017012150-41461b750ad8 h1:m6vOH4hzRcaoVFQe8SiMdsFe5HEGyWYCwynQRLNEfR8=
 github.com/rityak/sing-shadowsocks v0.2.14-0.20261017012150-41461b750ad8/go.mod h1:2e5EIaw0rxKrm1YTRmiMnDulwbGxH9hAFlrwQLQMQkU=
 github.com/rityak/sing-shadowsocks2 v0.2.9-0.20261017012153-da4a7a72dbf5 h1:W7/6EVz50gPVboBG2+couZeU/BIpsywG9Bkh1JNK+Go=
