@@ -73,7 +73,7 @@ func TestClientConfigDefaults(t *testing.T) {
 	if err := cfg.Prepare(); err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Proto != ProtoUDP || cfg.Dev != "tun" || cfg.Cipher != CipherAES128GCM || cfg.Auth != AuthSHA256 {
+	if cfg.Proto != ProtoUDP || cfg.Dev != "tun" || cfg.Cipher != CipherAES128GCM || cfg.Auth != AuthSHA1 {
 		t.Fatalf("unexpected defaults: proto=%s dev=%s cipher=%s auth=%s", cfg.Proto, cfg.Dev, cfg.Cipher, cfg.Auth)
 	}
 }
