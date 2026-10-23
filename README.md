@@ -41,6 +41,7 @@
 ### Потоки и TLS
 - VLESS XHTTP (все режимы, в том числе `packet-up` с сервером Xray) и trusttunnel не теряют хвост данных при закрытии соединения.
 - XTLS Vision не теряет последние байты, пришедшие вместе с закрытием TLS.
+- Сервер VMess не теряет данные клиента, первый чанк которого длиннее 4 КиБ (клиенты sing-box и Xray): остаток чанка после подглядывания ранних данных больше не пропадает (форк `sing`, `bufio.ChunkReader`).
 - utls и REALITY: все TLS-записи одного `Write` уходят одним системным вызовом.
 - smux: запись, брошенная по таймауту, не уходит в сеть с чужими данными.
 - Исправлены гонки данных в XTLS Vision, restls и anytls.
@@ -69,5 +70,6 @@
 - [rityak/restls-client-go](https://github.com/rityak/restls-client-go) — restls
 - [rityak/sing-shadowsocks](https://github.com/rityak/sing-shadowsocks) — сервер Shadowsocks
 - [rityak/sing-shadowsocks2](https://github.com/rityak/sing-shadowsocks2) — клиент Shadowsocks
+- [rityak/sing](https://github.com/rityak/sing) — общая библиотека протоколов (буферы, чанки)
 
 В форках наш код лежит в ветке `miray`.
