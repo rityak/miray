@@ -112,6 +112,9 @@ type httpConn struct {
 
 func (h *httpConn) setup(body io.ReadCloser, err error) {
 	h.setupOnce.Do(func() {
+		if body != nil {
+			body = &serialBody{ReadCloser: body}
+		}
 		h.body = body
 		h.createErr = err
 		close(h.created)
@@ -119,6 +122,19 @@ func (h *httpConn) setup(body io.ReadCloser, err error) {
 	if h.createErr != nil && body != nil { // conn already closed before setup
 		_ = body.Close()
 	}
+}
+
+// serialBody lets one Read at a time reach the response body: a client Close drains
+// the body (lingerTeardown) while the user's Read may still be running (T-121, go test -race).
+type serialBody struct {
+	io.ReadCloser
+	readAccess sync.Mutex
+}
+
+func (b *serialBody) Read(p []byte) (int, error) {
+	b.readAccess.Lock()
+	defer b.readAccess.Unlock()
+	return b.ReadCloser.Read(p)
 }
 
 func (h *httpConn) waitCreated() error {
