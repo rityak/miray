@@ -4,27 +4,13 @@ import (
 	"errors"
 	"testing"
 
-	C "github.com/metacubex/mihomo/constant"
-
 	tun "github.com/metacubex/sing-tun"
 )
 
 func TestDefaultTunMTU(t *testing.T) {
-	for _, c := range []struct {
-		stack C.TUNStack
-		goos  string
-		want  uint32
-	}{
-		{C.TunSystem, "linux", 65535},
-		{C.TunMips, "linux", 9000},
-		{C.TunGvisor, "linux", 65535},
-		{C.TunMixed, "linux", 65535},
-		{C.TunGvisor, "android", 9000},
-		{C.TunSystem, "android", 9000},
-		{C.TunSystem, "windows", 9000},
-	} {
-		if got := defaultTunMTU(c.stack, c.goos); got != c.want {
-			t.Errorf("%s/%s: %d, want %d", c.goos, c.stack, got, c.want)
+	for goos, want := range map[string]uint32{"linux": 65535, "android": 9000, "windows": 9000, "darwin": 9000} {
+		if got := defaultTunMTU(goos); got != want {
+			t.Errorf("%s: %d, want %d", goos, got, want)
 		}
 	}
 }
