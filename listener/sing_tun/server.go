@@ -191,7 +191,7 @@ func New(options LC.Tun, tunnel C.Tunnel, additions ...inbound.Addition) (l *Lis
 	})
 	tunMTU := options.MTU
 	if tunMTU == 0 {
-		tunMTU = defaultTunMTU(options.Stack, runtime.GOOS)
+		tunMTU = defaultTunMTU(runtime.GOOS)
 	}
 	var udpTimeout time.Duration
 	if options.UDPTimeout != 0 {
@@ -716,13 +716,13 @@ func (l *Listener) Address() string {
 	return l.addrStr
 }
 
-// defaultTunMTU is the MTU when the config sets none: 65535 on Linux, as in sing-box,
-// except for mips, which is slower with it (D-005). With the system stack (and mixed, whose
-// TCP is the system one) TCP goes x1.7-2.6 at half the CPU per GB (S-010); gvisor without
-// GSO sends one MSS per write to the TUN, so at 9000 it makes four times the writes (T-117).
+// defaultTunMTU is the MTU when the config sets none: 65535 on Linux, as in sing-box (D-005).
+// With the system stack (and mixed, whose TCP is the system one) TCP goes x1.7-2.6 at half
+// the CPU per GB (S-010); gvisor without GSO sends one MSS per write to the TUN, so at 9000
+// it makes four times the writes (T-117); mips spends less CPU per GB at the same speed (T-122).
 // 9000 elsewhere: Android reports ENOBUFS.
-func defaultTunMTU(stack C.TUNStack, goos string) uint32 {
-	if goos == "linux" && stack != C.TunMips {
+func defaultTunMTU(goos string) uint32 {
+	if goos == "linux" {
 		return 65535
 	}
 	return 9000
