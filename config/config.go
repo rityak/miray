@@ -1709,13 +1709,14 @@ func parseIPV6(rawCfg *RawConfig) {
 }
 
 // tunGSO resolves the TUN gso option. An explicit value wins; otherwise batched
-// TUN I/O (vnet_hdr, GRO/GSO) is on for Linux with the mips and system stacks,
-// which gain from it, and off elsewhere (D-002, S-003: gvisor regresses).
+// TUN I/O (vnet_hdr, GRO/GSO) is on for Linux with the mips stack, which gains from it
+// at its MTU of 9000, and off elsewhere (D-002): gvisor regresses (S-003), and the system
+// stack, at MTU 65535 since D-005, only pays checksum and copies for it (T-117).
 func tunGSO(gso *bool, stack C.TUNStack, goos string) bool {
 	if gso != nil {
 		return *gso
 	}
-	return goos == "linux" && (stack == C.TunMips || stack == C.TunSystem)
+	return goos == "linux" && stack == C.TunMips
 }
 
 func parseTun(rawTun RawTun, dns *DNS, general *General) error {

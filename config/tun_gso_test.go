@@ -15,7 +15,8 @@ func TestTunGSODefault(t *testing.T) {
 		want  bool
 	}{
 		{nil, C.TunMips, "linux", true},
-		{nil, C.TunSystem, "linux", true},
+		{nil, C.TunSystem, "linux", false},
+		{&on, C.TunSystem, "linux", true},
 		{nil, C.TunGvisor, "linux", false},
 		{nil, C.TunMixed, "linux", false},
 		{nil, C.TunMips, "android", false},
