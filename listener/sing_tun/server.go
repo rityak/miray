@@ -716,11 +716,13 @@ func (l *Listener) Address() string {
 	return l.addrStr
 }
 
-// defaultTunMTU is the MTU when the config sets none: 65535 on Linux with the system
-// stack, as in sing-box (TCP x1.7-2.6, half the CPU per GB: D-005, S-010); 9000 elsewhere,
-// where mips and gvisor gain nothing from it and Android reports ENOBUFS.
+// defaultTunMTU is the MTU when the config sets none: 65535 on Linux, as in sing-box,
+// except for mips, which is slower with it (D-005). With the system stack (and mixed, whose
+// TCP is the system one) TCP goes x1.7-2.6 at half the CPU per GB (S-010); gvisor without
+// GSO sends one MSS per write to the TUN, so at 9000 it makes four times the writes (T-117).
+// 9000 elsewhere: Android reports ENOBUFS.
 func defaultTunMTU(stack C.TUNStack, goos string) uint32 {
-	if goos == "linux" && stack == C.TunSystem {
+	if goos == "linux" && stack != C.TunMips {
 		return 65535
 	}
 	return 9000

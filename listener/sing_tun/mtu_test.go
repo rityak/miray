@@ -17,7 +17,9 @@ func TestDefaultTunMTU(t *testing.T) {
 	}{
 		{C.TunSystem, "linux", 65535},
 		{C.TunMips, "linux", 9000},
-		{C.TunGvisor, "linux", 9000},
+		{C.TunGvisor, "linux", 65535},
+		{C.TunMixed, "linux", 65535},
+		{C.TunGvisor, "android", 9000},
 		{C.TunSystem, "android", 9000},
 		{C.TunSystem, "windows", 9000},
 	} {
