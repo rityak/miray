@@ -203,7 +203,7 @@ func New(config LC.ShadowsocksServer, lc C.InboundListenConfig, tunnel C.Tunnel,
 						rwOptions.PostReturn(buff)
 						_ = sl.service.NewPacket(ctx, conn, buff, M.Metadata{
 							Protocol: "shadowsocks",
-							Source:   M.SocksaddrFromNet(reader.Addr(i)).Unwrap(),
+							Source:   M.SocksaddrFromNetIP(reader.AddrPort(i)), // no address allocated per datagram (T-128)
 						})
 					}
 				}
