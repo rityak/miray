@@ -10,6 +10,10 @@ import (
 
 var DefaultAllocator = NewAllocator()
 
+// MaxPooledBufferSize is the largest pooled buffer: a full 64 KiB frame with its header and
+// tag (an AEAD chunk of 65535+16 bytes) still comes from the pool (T-125, sagernet/sing cbeb0ed).
+const MaxPooledBufferSize = 1<<16 + 1<<13
+
 type Allocator interface {
 	Get(size int) []byte
 	Put(buf []byte) error
@@ -17,15 +21,15 @@ type Allocator interface {
 
 // defaultAllocator for incoming frames, optimized to prevent overwriting after zeroing
 type defaultAllocator struct {
-	buffers [11]sync.Pool
+	buffers [12]sync.Pool
 }
 
-// NewAllocator initiates a []byte allocator for frames less than 65536 bytes,
+// NewAllocator initiates a []byte allocator for frames up to MaxPooledBufferSize bytes,
 // the waste(memory fragmentation) of space allocation is guaranteed to be
 // no more than 50%.
 func NewAllocator() Allocator {
 	return &defaultAllocator{
-		buffers: [...]sync.Pool{ // 64B -> 64K
+		buffers: [...]sync.Pool{ // 64B -> 64K, then 72K
 			{New: func() any { return new([1 << 6]byte) }},
 			{New: func() any { return new([1 << 7]byte) }},
 			{New: func() any { return new([1 << 8]byte) }},
@@ -37,6 +41,7 @@ func NewAllocator() Allocator {
 			{New: func() any { return new([1 << 14]byte) }},
 			{New: func() any { return new([1 << 15]byte) }},
 			{New: func() any { return new([1 << 16]byte) }},
+			{New: func() any { return new([MaxPooledBufferSize]byte) }},
 		},
 	}
 }
@@ -48,11 +53,13 @@ func (alloc *defaultAllocator) Get(size int) []byte {
 		panic("alloc.Get: len out of range")
 	case size == 0:
 		return nil
-	case size > 65536:
+	case size > MaxPooledBufferSize:
 		return make([]byte, size)
 	default:
 		var index uint16
-		if size > 64 {
+		if size > 1<<16 {
+			index = 11
+		} else if size > 64 {
 			index = msb(size)
 			if size != 1<<index {
 				index += 1
@@ -84,6 +91,8 @@ func (alloc *defaultAllocator) Get(size int) []byte {
 			return buffer.(*[1 << 15]byte)[:size]
 		case 10:
 			return buffer.(*[1 << 16]byte)[:size]
+		case 11:
+			return buffer.(*[MaxPooledBufferSize]byte)[:size]
 		default:
 			panic("invalid pool index")
 		}
@@ -91,8 +100,14 @@ func (alloc *defaultAllocator) Get(size int) []byte {
 }
 
 // Put returns a []byte to pool for future use,
-// which the cap must be exactly 2^n
+// which the cap must be exactly 2^n or MaxPooledBufferSize
 func (alloc *defaultAllocator) Put(buf []byte) error {
+	if cap(buf) == MaxPooledBufferSize {
+		//nolint
+		//lint:ignore SA6002 ignore temporarily
+		alloc.buffers[11].Put((*[MaxPooledBufferSize]byte)(buf[:MaxPooledBufferSize]))
+		return nil
+	}
 	if cap(buf) == 0 || cap(buf) > 65536 {
 		return nil
 	}
