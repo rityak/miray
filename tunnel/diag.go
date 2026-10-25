@@ -47,6 +47,21 @@ func diagDial(m *C.Metadata, rule C.Rule, proxy C.ProxyAdapter) diag.Dial {
 	d := diag.Dial{Network: m.NetWork.String(), Inbound: m.Type.String(), Host: m.Host, IP: m.DstIP, Port: m.DstPort}
 	if proxy != nil {
 		d.Proxy = proxy.Name()
+		// a group's current choice, down to the node: a failure is the node's, not the group's
+		func() {
+			defer func() { _ = recover() }() // the journal must never take the core down
+			var leaf C.ProxyAdapter = proxy
+			for i := 0; i < 8; i++ {
+				next := leaf.Unwrap(m, false)
+				if next == nil {
+					break
+				}
+				leaf = next
+			}
+			if leaf != proxy {
+				d.Via, d.Proxy = proxy.Name(), leaf.Name()
+			}
+		}()
 	}
 	if rule != nil {
 		d.Rule = rule.RuleType().String()

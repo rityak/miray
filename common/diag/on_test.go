@@ -372,3 +372,45 @@ func TestPeakSpeedInTheMinuteRecord(t *testing.T) {
 	}
 	t.Fatal("no minute record of the node")
 }
+
+// A raw socket read error has no address: its side is the direction's source.
+func TestRawReadSideIsTheDirectionsSource(t *testing.T) {
+	c1, c2 := net.Pipe()
+	defer c1.Close()
+	defer c2.Close()
+	err := errors.New("raw read: An existing connection was forcibly closed by the remote host.")
+	if fromProxy(err, c1, false) || !fromProxy(err, c1, true) {
+		t.Fatal("upload reads the client, download reads the proxy")
+	}
+}
+
+// A connection opened ahead and used later is timed from the client's first write.
+func TestAnswerTimedFromTheFirstWrite(t *testing.T) {
+	m := mark()
+	e := end("ahead", 100, 5000, 20*time.Second, RelayResult{})
+	e.State.firstUp.Store(e.Start.Add(15 * time.Second).UnixNano())
+	e.State.firstDown.Store(e.Start.Add(15*time.Second + 100*time.Millisecond).UnixNano())
+	TCPClosed(e)
+	if got := collect(t, "tcp.stall", m); len(got) != 0 {
+		t.Fatalf("%v", got)
+	}
+}
+
+// Parallel connections of one transfer add up in the minute record.
+func TestParallelTransferAddsUp(t *testing.T) {
+	summary.roll(time.Now())
+	for i := 0; i < 4; i++ {
+		TCPClosed(end("multi", 1<<10, 25<<20, 10*time.Second, RelayResult{FirstEnd: 1}))
+	}
+	for _, line := range summary.roll(time.Now()) {
+		var r map[string]any
+		_ = json.Unmarshal(line, &r)
+		if r["node"] == "multi" {
+			if v, _ := r["down_total_mbps"].(float64); v < 80 || v > 90 { // 100 MiB in 10 s
+				t.Fatalf("down_total_mbps %v", r)
+			}
+			return
+		}
+	}
+	t.Fatal("no minute record of the node")
+}

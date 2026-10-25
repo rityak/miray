@@ -432,12 +432,17 @@ func batchExchange(ctx context.Context, clients []dnsClient, m *D.Msg) (msg *D.M
 				start = time.Now()
 			}
 			m, err := client.ExchangeContext(ctx, m)
-			if diag.Enabled {
+			// once one upstream answered the picker cancels the rest: those are not failures
+			if diag.Enabled && !errors.Is(ctx.Err(), context.Canceled) {
 				rcode, truncated := -1, false
 				if m != nil {
 					rcode, truncated = m.Rcode, m.Truncated
 				}
-				diag.DNS(client.Address(), domain, qTypeStr, time.Since(start), err, rcode, truncated)
+				addr := client.Address()
+				if _, ok := client.(*dnsOverQUIC); ok { // its address has no scheme
+					addr = "quic://" + addr
+				}
+				diag.DNS(addr, domain, qTypeStr, time.Since(start), err, rcode, truncated)
 			}
 			if err != nil {
 				return nil, err
