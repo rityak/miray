@@ -24,7 +24,8 @@ type RelayResult struct {
 	UpErr, DownErr           error
 	UpAt, DownAt             time.Time
 	UpRemote, DownRemote     bool
-	DownFirst                bool // the download direction finished first
+	DownFirst                bool  // the download direction finished first
+	FirstEnd                 int64 // order of the first direction's end (diag.order)
 	UpHalfLost, DownHalfLost bool
 }
 

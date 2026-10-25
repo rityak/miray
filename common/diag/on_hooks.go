@@ -17,13 +17,14 @@ import (
 
 // Thresholds of the single records (S-019).
 const (
-	slowFloor  = 500 * time.Millisecond // dial.slow, dns slow: and over 3 medians
-	ttfbStall  = 10 * time.Second       // tcp.stall: no answer to a request this long
-	gapStall   = 30 * time.Second       // tcp.stall: client sent, nothing back this long, then an error
-	silentLife = 5 * time.Second        // tcp.silent: a client that gave up sooner is not counted
-	rebindIn   = 5 * time.Minute        // udp.rebind: a flow back this soon after its idle close
-	udpIdle    = 60 * time.Second       // tunnel.udpTimeout, for the record
-	flapWindow = 10 * time.Minute       // group.flap: more than 3 alive changes in this window
+	slowFloor    = 500 * time.Millisecond // dial.slow, dns slow: and over 3 medians
+	ttfbStall    = 10 * time.Second       // tcp.stall: no answer to a request this long
+	gapStall     = 30 * time.Second       // tcp.stall: client sent, nothing back this long, then an error
+	silentLife   = 5 * time.Second        // tcp.silent: a client that gave up sooner is not counted
+	rebindIn     = 5 * time.Minute        // udp.rebind: a flow back this soon after its idle close
+	udpIdle      = 60 * time.Second       // tunnel.udpTimeout, for the record
+	flapWindow   = 10 * time.Minute       // group.flap: more than 3 alive changes in this window
+	udpDropFloor = 5                      // udp.drop: datagrams lost in the queue of one session
 )
 
 var (
@@ -230,10 +231,19 @@ func Dropped(reason string, d Dial) {
 		"dst", dst(d.Host, d.IP, d.Port))
 }
 
+// order sequences the ends of relay directions and outside closes of connections:
+// the clock may give two events one tick.
+var order atomic.Int64
+
 // ConnState is the activity of a relayed TCP connection (unix ns).
 type ConnState struct {
 	firstDown, lastDown, lastUp atomic.Int64
+	closed                      atomic.Int64 // order of the first Close of the tracker
 }
+
+// Closed marks a Close of the connection's tracker. One before the relay's first
+// direction ended came from outside: the API, a proxy switch, a group.
+func (s *ConnState) Closed() { s.closed.CompareAndSwap(0, order.Add(1)) }
 
 func (s *ConnState) Up(n int64) {
 	if n > 0 {
@@ -253,7 +263,8 @@ func (s *ConnState) Down(n int64) {
 }
 
 // TCPClosed decides what a finished TCP connection shows: tcp.silent, tcp.stall,
-// tcp.reset, tcp.halfclose.
+// tcp.reset. A connection the core closed itself, and an end this process caused,
+// are not anomalies: they are counted in the minute record.
 func TCPClosed(e TCPEnd) {
 	node, group := nodeOf(e.Chain)
 	if !active || !proxied(node) {
@@ -265,15 +276,35 @@ func TCPClosed(e TCPEnd) {
 	if e.State != nil {
 		firstDown, lastDown, lastUp = unixTime(e.State.firstDown.Load()), unixTime(e.State.lastDown.Load()), unixTime(e.State.lastUp.Load())
 	}
+	r := e.Relay
+	byCore := e.State != nil && e.State.closed.Load() != 0 && e.State.closed.Load() < r.FirstEnd
 	summary.update(node, func(n *nodeStats) {
 		n.up += e.Up
 		n.down += e.Down
 		if e.Up > 0 && !firstDown.IsZero() {
 			n.ttfb = sample(n.ttfb, ms(firstDown.Sub(e.Start)))
 		}
+		// RFC 9293 §3.6: through a TUN an application's close() and shutdown() look the same,
+		// so a half close that the proxy side cannot pass on is only counted
+		if r.UpHalfLost || r.DownHalfLost {
+			n.halfclose++
+		}
+		if byCore {
+			n.closedByCore++
+		}
+		if secs := life.Seconds(); secs >= 1 {
+			if e.Down >= 1<<20 {
+				n.downPeak = maxf(n.downPeak, float64(e.Down)*8/secs/1e6)
+			}
+			if e.Up >= 1<<20 {
+				n.upPeak = maxf(n.upPeak, float64(e.Up)*8/secs/1e6)
+			}
+		}
 	})
+	if byCore {
+		return
+	}
 
-	r := e.Relay
 	downFirst := r.DownFirst
 	endErr, endRemote, endDir := r.UpErr, r.UpRemote, "up"
 	if downFirst {
@@ -281,25 +312,29 @@ func TCPClosed(e TCPEnd) {
 	}
 	common := []any{"proto", protoOf(node), "grp", group, "conn", shortID(e.ID), "dst", dst(e.Host, e.IP, e.Port),
 		"up", e.Up, "down", e.Down, "life_ms", life}
-	closeKV := []any{"end", endDir, "class", class(endErr), "err", endErr, "remote", endRemote}
+	endClass := class(endErr)
+	closeKV := []any{"end", endDir, "class", endClass, "err", endErr, "remote", endRemote}
+	byProxy := endErr != nil && endRemote && !ours(endClass) // the proxy side broke it
 
 	switch {
+	case endErr != nil && ours(endClass):
+		// ended by this process (a stream or request it canceled): not the proxy's doing
 	case e.Up > 0 && e.Down == 0 && (downFirst || life >= silentLife):
 		event("tcp.silent", node, append(common, closeKV...)...)
 	case e.Up > 0 && !firstDown.IsZero() && firstDown.Sub(e.Start) >= ttfbStall:
 		event("tcp.stall", node, append(common, "reason", "ttfb", "ttfb_ms", firstDown.Sub(e.Start))...)
-	case endErr != nil && endRemote && !lastDown.IsZero() && lastUp.After(lastDown) && now.Sub(lastDown) >= gapStall:
+	case byProxy && !lastDown.IsZero() && lastUp.After(lastDown) && now.Sub(lastDown) >= gapStall:
 		event("tcp.stall", node, append(append(common, "reason", "gap", "gap_ms", now.Sub(lastDown)), closeKV...)...)
-	case endErr != nil && endRemote && class(endErr) != "closed" && class(endErr) != "canceled":
+	case byProxy:
 		event("tcp.reset", node, append(common, closeKV...)...)
 	}
-	if r.UpHalfLost || r.DownHalfLost {
-		dir := "up" // the client finished; the proxy connection had no CloseWrite
-		if r.DownHalfLost {
-			dir = "down"
-		}
-		event("tcp.halfclose", node, append(common, "finished", dir, "up_err", r.UpErr, "down_err", r.DownErr)...)
+}
+
+func maxf(a, b float64) float64 {
+	if a > b {
+		return a
 	}
+	return b
 }
 
 func unixTime(ns int64) time.Time {
@@ -321,6 +356,14 @@ type UDPState struct {
 	queueDrops, fullDrops, writeErrs atomic.Int64
 	firstErr                         atomic.Pointer[string]
 	idle                             atomic.Bool
+	endErr                           atomic.Pointer[error] // the read error that ended the session
+}
+
+// End records the error that ended the session's reads.
+func (s *UDPState) End(err error) {
+	if err != nil {
+		s.endErr.CompareAndSwap(nil, &err)
+	}
 }
 
 // SetIdle marks a session closed by its idle timer.
@@ -393,20 +436,36 @@ func UDPClosed(e UDPEnd) {
 			firstErr = *p
 		}
 	}
+	var endErr error
+	if e.Conn != nil {
+		if p := e.Conn.endErr.Load(); p != nil {
+			endErr = *p
+		}
+	}
+	// a session not ended by its idle timer whose reads stopped on our own close was
+	// closed by the core (the API, a proxy switch)
+	byCore := !e.Idle && endErr != nil && ours(class(endErr))
 	drops := queueDrops + fullDrops + writeErrs
 	summary.update(node, func(n *nodeStats) {
 		n.up += e.Up
 		n.down += e.Down
 		n.udpDrops += int(drops)
+		if byCore {
+			n.closedByCore++
+		}
 	})
+	if byCore {
+		return
+	}
 	common := []any{"proto", protoOf(node), "grp", group, "dst", dst(e.Host, e.IP, e.Port),
-		"up", e.Up, "down", e.Down, "life_ms", time.Since(e.Start), "idle", e.Idle}
+		"up", e.Up, "down", e.Down, "life_ms", time.Since(e.Start), "idle", e.Idle, "class", class(endErr), "err", endErr}
 	if e.Up > 0 && e.Down == 0 {
 		event("udp.oneway", node, common...)
 	}
-	if drops > 0 {
+	// a datagram or two late while the proxy dials is the queue working (T-130): counted only
+	if writeErrs > 0 || queueDrops+fullDrops >= udpDropFloor {
 		event("udp.drop", node, append(common, "queue_late", queueDrops, "queue_full", fullDrops,
-			"write_err", writeErrs, "err", firstErr)...)
+			"write_err", writeErrs, "write_error", firstErr)...)
 	}
 }
 
@@ -439,7 +498,10 @@ func WatchQUIC(node string, conn *quic.Conn, start time.Time) {
 			}
 			reason, code, remote = "transport", transportErr.ErrorCode.String(), transportErr.Remote
 		case errors.As(cause, &idleErr):
-			reason = "idle_timeout"
+			// an idle connection the client let expire, or a dead path: the stalls and
+			// failures of its connections tell them apart, so only counted
+			summary.update(node, func(n *nodeStats) { n.quicIdle++ })
+			return
 		case errors.As(cause, &resetErr):
 			reason, remote = "stateless_reset", true
 		case cause == nil || errors.Is(cause, context.Canceled):
@@ -498,6 +560,8 @@ func DNS(addr, domain, qtype string, d time.Duration, err error, rcode int, trun
 	name = strings.TrimSuffix(name, ":0")
 	reason := ""
 	switch {
+	case err != nil && ours(class(err)):
+		return // a connection this process closed (reset on a network change, a reload)
 	case err != nil:
 		reason = class(err)
 	case rcode == 2:
@@ -524,7 +588,10 @@ func GroupPick(group, node string) {
 	if !active {
 		return
 	}
-	if prev, loaded := groupLast.Swap(group, node); loaded && prev.(string) != node {
+	if node == "COMPATIBLE" { // the placeholder of a group whose provider has not loaded yet
+		return
+	}
+	if prev, loaded := groupLast.Swap(group, node); loaded && prev.(string) != node && prev.(string) != "COMPATIBLE" {
 		event("group.switch", group, "from", prev.(string), "to", node)
 	}
 }
