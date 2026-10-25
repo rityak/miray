@@ -46,3 +46,17 @@ func BenchmarkMSB(b *testing.B) {
 		msb(randv2.Int())
 	}
 }
+
+// A full AEAD chunk (65535 bytes and a 16-byte tag, ss2022 reads one per 64 KiB) is pooled,
+// not a fresh heap buffer on every read (T-125, as sagernet/sing cbeb0ed).
+func TestAllocFullChunkPooled(t *testing.T) {
+	alloc := NewAllocator()
+	assert.Equal(t, MaxPooledBufferSize, cap(alloc.Get(65535+16)))
+	assert.Equal(t, MaxPooledBufferSize, cap(alloc.Get(MaxPooledBufferSize)))
+	assert.Equal(t, MaxPooledBufferSize+1, cap(alloc.Get(MaxPooledBufferSize+1)))
+	assert.Nil(t, alloc.Put(make([]byte, MaxPooledBufferSize)))
+	allocs := testing.AllocsPerRun(100, func() {
+		_ = alloc.Put(alloc.Get(65535 + 16))
+	})
+	assert.Less(t, allocs, 1.0)
+}
