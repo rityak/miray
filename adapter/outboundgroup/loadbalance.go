@@ -121,7 +121,8 @@ func jumpHash(key uint64, buckets int32) int32 {
 // DialContext implements C.ProxyAdapter
 func (lb *LoadBalance) DialContext(ctx context.Context, metadata *C.Metadata) (c C.Conn, err error) {
 	proxy := lb.Unwrap(metadata, true)
-	c, err = proxy.DialContext(ctx, metadata)
+	c, proxy, err = failover(ctx, lb.GroupBase, proxy, lb.next(metadata),
+		func(p C.Proxy) (C.Conn, error) { return p.DialContext(ctx, metadata) }, nil, lb.healthCheck)
 
 	if err == nil {
 		c.AppendToChains(lb)
@@ -151,7 +152,9 @@ func (lb *LoadBalance) ListenPacketContext(ctx context.Context, metadata *C.Meta
 	}()
 
 	proxy := lb.Unwrap(metadata, true)
-	return proxy.ListenPacketContext(ctx, metadata)
+	pc, _, err = failover(ctx, lb.GroupBase, proxy, lb.next(metadata),
+		func(p C.Proxy) (C.PacketConn, error) { return p.ListenPacketContext(ctx, metadata) }, nil, lb.healthCheck)
+	return pc, err
 }
 
 // SupportUDP implements C.ProxyAdapter
@@ -252,8 +255,27 @@ func strategyStickySessions(url string, keyOf keyFn) strategyFn {
 
 // Unwrap implements C.ProxyAdapter
 func (lb *LoadBalance) Unwrap(metadata *C.Metadata, touch bool) C.Proxy {
-	proxies := lb.GetProxies(touch)
+	proxies := lb.candidates(lb.GetProxies(touch))
 	return lb.strategyFn(proxies, metadata, touch)
+}
+
+// next picks by the strategy among the usable nodes but skip, for a failover (T-129).
+func (lb *LoadBalance) next(metadata *C.Metadata) func(skip C.Proxy) C.Proxy {
+	return func(skip C.Proxy) C.Proxy {
+		var rest []C.Proxy
+		for _, p := range lb.candidates(lb.GetProxies(false)) {
+			if p != skip {
+				rest = append(rest, p)
+			}
+		}
+		if len(rest) == 0 {
+			return nil
+		}
+		if p := lb.strategyFn(rest, metadata, false); p != nil && p.AliveForTestUrl(lb.testUrl) && !lb.down.has(p) {
+			return p
+		}
+		return lb.nextUsable(rest, lb.testUrl, skip)
+	}
 }
 
 // MarshalJSON implements C.ProxyAdapter
