@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/metacubex/mihomo/common/diag"
 	"github.com/metacubex/mihomo/component/iface"
 	"github.com/metacubex/mihomo/component/resolver"
 	C "github.com/metacubex/mihomo/constant"
@@ -258,6 +259,9 @@ type attempt[T io.Closer] struct {
 func failover[T io.Closer](ctx context.Context, gb *GroupBase, first C.Proxy, testUrl string,
 	next func(skip C.Proxy) []C.Proxy, dial func(context.Context, C.Proxy) (T, error),
 	reset func(), healthCheck func()) (T, C.Proxy, error) {
+	if diag.Enabled && gb.Type() != C.LoadBalance {
+		diag.GroupPick(gb.Name(), first.Name())
+	}
 	if noFailover(first.Type()) {
 		c, err := dial(ctx, first)
 		return c, first, err
@@ -303,11 +307,17 @@ func failover[T io.Closer](ctx context.Context, gb *GroupBase, first C.Proxy, te
 				if pending > 0 {
 					go closeLate(results, pending)
 				}
+				if diag.Enabled && r.node != first && firstErr == nil {
+					diag.GroupRace(gb.Name(), first.Name(), r.node.Name())
+				}
 				if r.node == first {
 					gb.lostRaces.Store(0)
 				} else if firstErr == nil && gb.lostRaces.Add(1) >= int32(gb.maxFailedTimes) {
 					gb.lostRaces.Store(0)
 					log.Infoln("ProxyGroup: %s: %s lost %d races in a row, health check", gb.Name(), first.Name(), gb.maxFailedTimes)
+					if diag.Enabled {
+						diag.GroupCheck(gb.Name(), "lost_races")
+					}
 					go healthCheck()
 				}
 				if r.node != first && firstErr != nil {
@@ -316,6 +326,10 @@ func failover[T io.Closer](ctx context.Context, gb *GroupBase, first C.Proxy, te
 					log.Warnln("ProxyGroup: %s: %s failed (%v), %s got through; set aside (whole server: %v), health check",
 						gb.Name(), first.Name(), firstErr, r.node.Name(), wholeServer)
 					gb.setAside(first, firstIP, wholeServer, gb.GetProxies(false))
+					if diag.Enabled {
+						diag.GroupAside(gb.Name(), first.Name(), r.node.Name(), wholeServer, firstErr)
+						diag.GroupCheck(gb.Name(), "set_aside")
+					}
 					if reset != nil {
 						reset()
 					}

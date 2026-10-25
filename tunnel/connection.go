@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/metacubex/mihomo/common/diag"
 	"github.com/metacubex/mihomo/common/handicap"
 	N "github.com/metacubex/mihomo/common/net"
 	C "github.com/metacubex/mihomo/constant"
@@ -39,6 +40,9 @@ var queueClock = monotonic // replaced in tests
 func (s *packetSender) fresh(q queued, now int64) (senderItem, bool) {
 	if now-q.at > int64(maxQueueDelay) {
 		q.item.Drop()
+		if diag.Enabled {
+			s.diag.QueueDrop()
+		}
 		return nil, false
 	}
 	return q.item, true
@@ -48,6 +52,7 @@ type packetSender struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	ch     chan queued
+	diag   diag.UDPState // zero-size without the miraydiag tag (T-138)
 
 	// destination NAT mapping
 	originToTarget map[string]netip.Addr
@@ -273,7 +278,9 @@ drain:
 		for len(s.corkAddrs) < len(datas) {
 			s.corkAddrs = append(s.corkAddrs, nil)
 		}
-		_ = s.corkW.write(datas, s.corkAddrs[:len(datas)])
+		if err := s.corkW.write(datas, s.corkAddrs[:len(datas)]); diag.Enabled && err != nil {
+			s.diag.WriteErr(err)
+		}
 	}
 	for i := range items {
 		items[i] = nil // the packets are recycled after Drop
@@ -350,7 +357,10 @@ func (s *packetSender) flushBatch(pc C.PacketConn, pkts []C.UDPFastPacket) {
 		if len(datas) == 0 {
 			return
 		}
-		_ = s.batch.write(datas, addrs) // lastWrite is kept by the batch writer's count
+		// lastWrite is kept by the batch writer's count
+		if err := s.batch.write(datas, addrs); diag.Enabled && err != nil {
+			s.diag.WriteErr(err)
+		}
 		datas, addrs = datas[:0], addrs[:0]
 	}
 	for _, p := range pkts {
@@ -416,6 +426,9 @@ func (s *packetSender) send(packet senderItem) {
 		}
 	default:
 		packet.Drop() // chan is full
+		if diag.Enabled {
+			s.diag.FullDrop()
+		}
 	}
 }
 
@@ -443,13 +456,16 @@ func handleUDPToRemote(data []byte, pc C.PacketConn, addr *net.UDPAddr) error {
 // directions resetting a runtime timer on every packet (S-001, F3).
 type udpActivityConn struct {
 	C.PacketConn
-	lastWrite atomic.Int64 // unix nanoseconds
+	diag      diag.UDPState // zero-size without the miraydiag tag (T-138)
+	lastWrite atomic.Int64  // unix nanoseconds
 }
 
 func (c *udpActivityConn) WriteTo(b []byte, addr net.Addr) (int, error) {
 	n, err := c.PacketConn.WriteTo(b, addr)
 	if err == nil {
 		c.lastWrite.Store(time.Now().UnixNano())
+	} else if diag.Enabled {
+		c.diag.WriteErr(err)
 	}
 	return n, err
 }
@@ -460,6 +476,9 @@ func handleUDPToLocal(writeBack C.WriteBack, pc *udpActivityConn, sender C.Packe
 		_ = pc.Close()
 		closeAllLocalCoon(key)
 		natTable.Delete(key)
+		if diag.Enabled {
+			diagUDPClosed(pc, sender)
+		}
 	}()
 
 	// replies of datagrams already queued on pc are held on the listener socket and
@@ -488,6 +507,9 @@ func handleUDPToLocal(writeBack C.WriteBack, pc *udpActivityConn, sender C.Packe
 		if d := time.Until(time.Unix(0, last).Add(udpTimeout)); d > 0 {
 			idle.Load().Reset(d)
 			return
+		}
+		if diag.Enabled {
+			pc.diag.SetIdle()
 		}
 		_ = pc.Close()
 	}))
