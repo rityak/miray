@@ -37,8 +37,15 @@ import (
 )
 
 const (
-	queueCapacity  = 64  // chan capacity tcpQueue and udpQueue
-	senderCapacity = 128 // chan capacity of PacketSender
+	queueCapacity = 64 // chan capacity tcpQueue and udpQueue
+	// senderCapacity bounds a session's queue by count, only as a memory cap (16 KiB
+	// buffers: 16 MiB at most); the queue is bounded by time (maxQueueDelay, T-130).
+	senderCapacity = 1024
+	// maxQueueDelay: a datagram that waited longer in its session's queue (the proxy
+	// still dialing, or a slower outbound) is dropped instead of sent late (T-130, user
+	// decision: by time, not count; RFC 8289 sojourn time, RFC 7567 against bufferbloat).
+	// It covers the dial of a QUIC proxy, where 128 datagrams lost ~220 at 50 Mbit/s.
+	maxQueueDelay = 250 * time.Millisecond
 )
 
 var (
