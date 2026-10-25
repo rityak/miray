@@ -171,7 +171,7 @@ func DialFailed(t *Trace, d Dial, err error) {
 		stage = "session"
 	}
 	summary.update(d.Proxy, func(n *nodeStats) { n.fail++ })
-	event("dial.fail", d.Proxy, "proto", protoOf(d.Proxy), "net", d.Network, "stage", stage,
+	event("dial.fail", d.Proxy, "proto", protoOf(d.Proxy), "grp", d.Via, "net", d.Network, "stage", stage,
 		"class", class(err), "err", err, "attempts", int(t.failures.Load())+1,
 		"ms", time.Since(t.start), "connect_ms", connect, "dst", dst(d.Host, d.IP, d.Port),
 		"rule", d.Rule, "in", d.Inbound)
@@ -238,6 +238,7 @@ var order atomic.Int64
 // ConnState is the activity of a relayed TCP connection (unix ns).
 type ConnState struct {
 	firstDown, lastDown, lastUp atomic.Int64
+	firstUp                     atomic.Int64
 	closed                      atomic.Int64 // order of the first Close of the tracker
 }
 
@@ -247,7 +248,11 @@ func (s *ConnState) Closed() { s.closed.CompareAndSwap(0, order.Add(1)) }
 
 func (s *ConnState) Up(n int64) {
 	if n > 0 {
-		s.lastUp.Store(time.Now().UnixNano())
+		now := time.Now().UnixNano()
+		if s.firstUp.Load() == 0 {
+			s.firstUp.CompareAndSwap(0, now)
+		}
+		s.lastUp.Store(now)
 	}
 }
 
@@ -272,17 +277,31 @@ func TCPClosed(e TCPEnd) {
 	}
 	now := time.Now()
 	life := now.Sub(e.Start)
-	var firstDown, lastDown, lastUp time.Time
+	var firstDown, lastDown, lastUp, firstUp time.Time
 	if e.State != nil {
 		firstDown, lastDown, lastUp = unixTime(e.State.firstDown.Load()), unixTime(e.State.lastDown.Load()), unixTime(e.State.lastUp.Load())
+		firstUp = unixTime(e.State.firstUp.Load())
 	}
+	// the answer is timed from the client's first write: a connection opened ahead and
+	// used later (a speed test does that) waits for its own client, not for the proxy.
+	// Early data written before the tracker existed leaves firstUp after the answer.
+	asked := e.Start
+	if !firstUp.IsZero() && !firstDown.IsZero() && firstUp.Before(firstDown) {
+		asked = firstUp
+	}
+	ttfb := firstDown.Sub(asked)
 	r := e.Relay
 	byCore := e.State != nil && e.State.closed.Load() != 0 && e.State.closed.Load() < r.FirstEnd
 	summary.update(node, func(n *nodeStats) {
 		n.up += e.Up
 		n.down += e.Down
 		if e.Up > 0 && !firstDown.IsZero() {
-			n.ttfb = sample(n.ttfb, ms(firstDown.Sub(e.Start)))
+			n.ttfb = sample(n.ttfb, ms(ttfb))
+		}
+		if e.Down >= 1<<20 && e.Down >= e.Up {
+			n.bulkDown.add(e.Start, now, e.Down)
+		} else if e.Up >= 1<<20 {
+			n.bulkUp.add(e.Start, now, e.Up)
 		}
 		// RFC 9293 §3.6: through a TUN an application's close() and shutdown() look the same,
 		// so a half close that the proxy side cannot pass on is only counted
@@ -321,8 +340,8 @@ func TCPClosed(e TCPEnd) {
 		// ended by this process (a stream or request it canceled): not the proxy's doing
 	case e.Up > 0 && e.Down == 0 && (downFirst || life >= silentLife):
 		event("tcp.silent", node, append(common, closeKV...)...)
-	case e.Up > 0 && !firstDown.IsZero() && firstDown.Sub(e.Start) >= ttfbStall:
-		event("tcp.stall", node, append(common, "reason", "ttfb", "ttfb_ms", firstDown.Sub(e.Start))...)
+	case e.Up > 0 && !firstDown.IsZero() && ttfb >= ttfbStall:
+		event("tcp.stall", node, append(common, "reason", "ttfb", "ttfb_ms", ttfb)...)
 	case byProxy && !lastDown.IsZero() && lastUp.After(lastDown) && now.Sub(lastDown) >= gapStall:
 		event("tcp.stall", node, append(append(common, "reason", "gap", "gap_ms", now.Sub(lastDown)), closeKV...)...)
 	case byProxy:

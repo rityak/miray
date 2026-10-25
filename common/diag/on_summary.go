@@ -27,7 +27,34 @@ type nodeStats struct {
 	halfclose, closedByCore, quicIdle            int
 	up, down                                     int64
 	upPeak, downPeak                             float64 // Mbit/s of the fastest connection of 1 MiB or more
+	bulkUp, bulkDown                             span    // connections of 1 MiB or more, by their main direction
 	connect, handshake, ttfb                     []float64
+}
+
+// span is the bytes of bulk connections and the time from the first start to the last
+// end: parallel connections of one transfer (a speed test) add up as they do for the user.
+type span struct {
+	bytes    int64
+	from, to time.Time
+}
+
+func (s *span) add(from, to time.Time, n int64) {
+	s.bytes += n
+	if s.from.IsZero() || from.Before(s.from) {
+		s.from = from
+	}
+	if to.After(s.to) {
+		s.to = to
+	}
+}
+
+// mbps is the span's rate, 0 under a second.
+func (s *span) mbps() float64 {
+	d := s.to.Sub(s.from).Seconds()
+	if d < 1 {
+		return 0
+	}
+	return float64(s.bytes) * 8 / d / 1e6
 }
 
 func (m *minuteStats) node(name string) *nodeStats {
@@ -99,6 +126,12 @@ func (m *minuteStats) roll(now time.Time) [][]byte {
 		}
 		if n.upPeak != 0 {
 			kv = append(kv, "up_mbps", round1(n.upPeak))
+		}
+		if v := n.bulkDown.mbps(); v != 0 {
+			kv = append(kv, "down_total_mbps", round1(v))
+		}
+		if v := n.bulkUp.mbps(); v != 0 {
+			kv = append(kv, "up_total_mbps", round1(v))
 		}
 		if p := percentiles(n.connect); p != nil {
 			kv = append(kv, "connect_ms", p)

@@ -10,6 +10,7 @@ import (
 // the registrable domain and a hash of the IP.
 type Dial struct {
 	Network, Inbound, Proxy, Rule string
+	Via                           string // the group the rule chose when Proxy is its current node
 	Host                          string
 	IP                            netip.Addr
 	Port                          uint16

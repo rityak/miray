@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"strings"
 	"time"
 
 	"github.com/metacubex/mihomo/common/handicap"
@@ -49,8 +50,8 @@ func Relay(leftConn, rightConn net.Conn) (r RelayResult) {
 	}
 	<-ch
 
-	r.UpRemote = fromProxy(r.UpErr, leftConn)
-	r.DownRemote = fromProxy(r.DownErr, leftConn)
+	r.UpRemote = fromProxy(r.UpErr, leftConn, false)
+	r.DownRemote = fromProxy(r.DownErr, leftConn, true)
 	// a direction finished cleanly, the other side had no half close and the opposite
 	// direction ended in an error after it: it was cut
 	r.DownFirst = downOrder < upOrder
@@ -79,10 +80,16 @@ func closeWrite(writer io.Closer) bool {
 }
 
 // fromProxy tells whether err came from the proxy side: a socket error names its
-// address, and an error on the client's socket names the client's.
-func fromProxy(err error, client net.Conn) bool {
+// address, and an error on the client's socket names the client's. sourceIsProxy
+// is the direction: the download reads from the proxy, the upload from the client.
+func fromProxy(err error, client net.Conn, sourceIsProxy bool) bool {
 	if err == nil {
 		return false
+	}
+	// a read on a raw socket (sing's syscall reader, a plain TCP inbound such as the
+	// system proxy) carries no address: it failed on the direction's source
+	if strings.HasPrefix(err.Error(), "raw read") {
+		return sourceIsProxy
 	}
 	var op *net.OpError
 	if errors.As(err, &op) {
