@@ -211,7 +211,7 @@ func DialDone(t *Trace, d Dial, chain []string) {
 	if slow(ms(handshake), medians.add(node+"\x00handshake", ms(handshake)), ms(slowFloor)) {
 		slowStage = "handshake"
 	}
-	if slowStage != "" {
+	if slowStage != "" && failures == 0 { // with retries the time is the failures', counted as retried
 		event("dial.slow", node, "proto", protoOf(node), "grp", group, "stage", slowStage,
 			"connect_ms", connect, "handshake_ms", handshake, "retries", int(failures),
 			"dst", dst(d.Host, d.IP, d.Port))
