@@ -34,6 +34,7 @@ type GroupBase struct {
 	testTimeout       int
 	maxFailedTimes    int
 	emptyFallback     C.Proxy
+	down              downNodes // nodes set aside after a failover (T-129)
 
 	// for GetProxies
 	getProxiesMutex  sync.Mutex

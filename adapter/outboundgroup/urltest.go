@@ -56,7 +56,8 @@ func (u *URLTest) ForceSet(name string) {
 // DialContext implements C.ProxyAdapter
 func (u *URLTest) DialContext(ctx context.Context, metadata *C.Metadata) (c C.Conn, err error) {
 	proxy := u.fast(true)
-	c, err = proxy.DialContext(ctx, metadata)
+	c, proxy, err = failover(ctx, u.GroupBase, proxy, u.next,
+		func(p C.Proxy) (C.Conn, error) { return p.DialContext(ctx, metadata) }, u.fastSingle.Reset, u.healthCheck)
 	if err == nil {
 		c.AppendToChains(u)
 	} else {
@@ -79,7 +80,8 @@ func (u *URLTest) DialContext(ctx context.Context, metadata *C.Metadata) (c C.Co
 // ListenPacketContext implements C.ProxyAdapter
 func (u *URLTest) ListenPacketContext(ctx context.Context, metadata *C.Metadata) (C.PacketConn, error) {
 	proxy := u.fast(true)
-	pc, err := proxy.ListenPacketContext(ctx, metadata)
+	pc, proxy, err := failover(ctx, u.GroupBase, proxy, u.next,
+		func(p C.Proxy) (C.PacketConn, error) { return p.ListenPacketContext(ctx, metadata) }, u.fastSingle.Reset, u.healthCheck)
 	if err == nil {
 		pc.AppendToChains(u)
 	} else {
@@ -94,6 +96,20 @@ func (u *URLTest) Unwrap(metadata *C.Metadata, touch bool) C.Proxy {
 	return u.fast(touch)
 }
 
+// next is the fastest usable node but skip, for a failover (T-129).
+func (u *URLTest) next(skip C.Proxy) C.Proxy {
+	var best C.Proxy
+	for _, p := range u.GetProxies(false) {
+		if p == skip || !p.AliveForTestUrl(u.testUrl) || u.down.has(p) {
+			continue
+		}
+		if best == nil || p.LastDelayForTestUrl(u.testUrl) < best.LastDelayForTestUrl(u.testUrl) {
+			best = p
+		}
+	}
+	return best
+}
+
 func (u *URLTest) healthCheck() {
 	u.fastSingle.Reset()
 	u.GroupBase.healthCheck()
@@ -102,7 +118,7 @@ func (u *URLTest) healthCheck() {
 
 func (u *URLTest) fast(touch bool) C.Proxy {
 	elm, _, shared := u.fastSingle.Do(func() (C.Proxy, error) {
-		proxies := u.GetProxies(touch)
+		proxies := u.candidates(u.GetProxies(touch))
 		if u.selected != "" {
 			for _, proxy := range proxies {
 				if !proxy.AliveForTestUrl(u.testUrl) {
