@@ -49,7 +49,10 @@ func protoOf(node string) string {
 	lookupMu.RUnlock()
 	p := ""
 	if fn != nil {
-		p = fn(node)
+		func() {
+			defer func() { _ = recover() }() // the journal must never take the core down
+			p = fn(node)
+		}()
 	}
 	protoMemo.Store(node, p)
 	return p
