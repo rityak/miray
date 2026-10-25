@@ -22,10 +22,32 @@ type senderItem interface {
 	Drop()
 }
 
+// queued is a datagram with the time it entered its session's queue (T-130).
+type queued struct {
+	item senderItem
+	at   int64
+}
+
+var queueEpoch = time.Now()
+
+// monotonic is the queue clock: nanoseconds on the monotonic clock.
+func monotonic() int64 { return int64(time.Since(queueEpoch)) }
+
+var queueClock = monotonic // replaced in tests
+
+// fresh passes on a datagram that waited at most maxQueueDelay and drops an older one.
+func (s *packetSender) fresh(q queued, now int64) (senderItem, bool) {
+	if now-q.at > int64(maxQueueDelay) {
+		q.item.Drop()
+		return nil, false
+	}
+	return q.item, true
+}
+
 type packetSender struct {
 	ctx    context.Context
 	cancel context.CancelFunc
-	ch     chan senderItem
+	ch     chan queued
 
 	// destination NAT mapping
 	originToTarget map[string]netip.Addr
@@ -56,7 +78,7 @@ const maxBatch = 64
 // It ensures that packets can be sent sequentially and without blocking
 func newPacketSender() C.PacketSender {
 	ctx, cancel := context.WithCancel(context.Background())
-	ch := make(chan senderItem, senderCapacity)
+	ch := make(chan queued, senderCapacity)
 	return &packetSender{
 		ctx:    ctx,
 		cancel: cancel,
@@ -195,8 +217,10 @@ func (s *packetSender) Process(pc C.PacketConn, proxy C.WriteBackProxy) {
 		select {
 		case <-s.ctx.Done():
 			return // sender closed
-		case item := <-s.ch:
-			s.processItem(pc, proxy, item)
+		case q := <-s.ch:
+			if item, ok := s.fresh(q, queueClock()); ok {
+				s.processItem(pc, proxy, item)
+			}
 		}
 	}
 }
@@ -226,11 +250,14 @@ func (s *packetSender) processItem(pc C.PacketConn, proxy C.WriteBackProxy, item
 // sendmmsg or GSO write (T-059). A sparse datagram is sent alone and at once.
 func (s *packetSender) processCorked(pc C.PacketConn, proxy C.WriteBackProxy, first senderItem) {
 	items := append(s.corkItems[:0], first)
+	now := queueClock()
 drain:
 	for len(items) < maxBatch {
 		select {
-		case item := <-s.ch:
-			items = append(items, item)
+		case q := <-s.ch:
+			if item, ok := s.fresh(q, now); ok {
+				items = append(items, item)
+			}
 		default:
 			break drain
 		}
@@ -284,10 +311,15 @@ func (s *packetSender) processFastBatch(pc C.PacketConn, proxy C.WriteBackProxy,
 	}
 	pkts := append(s.batchPkts[:0], first)
 	var pending senderItem
+	now := queueClock()
 drain:
 	for len(pkts) < maxBatch {
 		select {
-		case item := <-s.ch:
+		case q := <-s.ch:
+			item, ok := s.fresh(q, now)
+			if !ok {
+				continue
+			}
 			if p, ok := item.(C.UDPFastPacket); ok {
 				pkts = append(pkts, p)
 				continue
@@ -353,8 +385,8 @@ func (s *packetSender) flushBatch(pc C.PacketConn, pkts []C.UDPFastPacket) {
 func (s *packetSender) dropAll() {
 	for {
 		select {
-		case data := <-s.ch:
-			data.Drop() // drop all data still in chan
+		case q := <-s.ch:
+			q.item.Drop() // drop all data still in chan
 		default:
 			return // no data, exit goroutine
 		}
@@ -375,7 +407,7 @@ func (s *packetSender) send(packet senderItem) {
 	// a full runtime.selectgo per packet (T-032). A send racing with Close is
 	// caught by the check after it, and a closed sender is caught above.
 	select {
-	case s.ch <- packet:
+	case s.ch <- queued{packet, queueClock()}:
 		// Close can finish draining before a concurrent send enqueues its packet.
 		select {
 		case <-s.ctx.Done():
