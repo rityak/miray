@@ -174,7 +174,18 @@ func (h *ListenerHandler) NewPacketConnection(ctx context.Context, conn network.
 		lAddr = inAddr
 	}
 	rawSrc := rawUDPAddr(metadata.Source)
-	additions := getAdditions(ctx)
+	// The metadata less the destination is the same for every datagram (T-128): built
+	// once with the additions in their order, copied per datagram, which then only
+	// takes its destination (no addition sets one).
+	base := C.Metadata{NetWork: C.UDP, Type: h.Type, RawSrcAddr: rawSrc}
+	inbound.ApplyAdditions(&base, inbound.WithSrcAddr(metadata.Source), inbound.WithInAddr(lAddr))
+	inbound.ApplyAdditions(&base, h.Additions...)
+	inbound.ApplyAdditions(&base, getAdditions(ctx)...)
+	var (
+		lastDst    M.Socksaddr
+		lastRawDst net.Addr // of lastDst: a flow keeps its destination
+		haveLast   bool
+	)
 	rwOptions := network.ReadWaitOptions{}
 	readWaiter, isReadWaiter := bufio.CreatePacketReadWaiter(conn)
 	if isReadWaiter {
@@ -210,7 +221,14 @@ func (h *ListenerHandler) NewPacketConnection(ctx context.Context, conn network.
 			buff:   buff,
 			reply:  reply,
 		}
-		h.handlePacket(cPacket, metadata.Source, dest, rawSrc, additions)
+		if !haveLast || dest != lastDst {
+			lastDst, lastRawDst, haveLast = dest, rawUDPAddr(dest), true
+		}
+		cMetadata := new(C.Metadata)
+		*cMetadata = base
+		cMetadata.RawDstAddr = lastRawDst
+		setDestination(cMetadata, dest)
+		h.Tunnel.HandleUDPPacket(cPacket, cMetadata)
 	}
 	return nil
 }
@@ -251,6 +269,22 @@ func (h *ListenerHandler) NewPacket(ctx context.Context, key netip.AddrPort, buf
 		cPacket.lAddr = conn.LocalAddr()
 	}
 	h.handlePacket(cPacket, metadata.Source, metadata.Destination, rawUDPAddr(metadata.Source), getAdditions(ctx))
+}
+
+// setDestination is inbound.WithDstAddr(dst) without boxing dst into a net.Addr:
+// the AddrPort branch of Metadata.SetRemoteAddr, the only one an M.Socksaddr takes
+// with a port.
+func setDestination(m *C.Metadata, dst M.Socksaddr) {
+	if dst.Port == 0 {
+		_ = m.SetRemoteAddr(dst)
+		return
+	}
+	m.DstPort = dst.Port
+	if dst.Addr.IsValid() {
+		m.DstIP = dst.Addr.Unmap()
+	} else {
+		m.Host = dst.Fqdn
+	}
 }
 
 // rawUDPAddr is the RawSrcAddr/RawDstAddr of a datagram: nil for a domain.
