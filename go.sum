@@ -202,8 +202,8 @@ github.com/rityak/quic-go v0.61.1-0.20261023103801-73103c651833 h1:BpDfWaX0IoPJx
 github.com/rityak/quic-go v0.61.1-0.20261023103801-73103c651833/go.mod h1:KTmibo7vZo0gCxdFWrPEQ/u/RGt92mJkrXDE2Qg2/AU=
 github.com/rityak/restls-client-go v0.0.0-20261015085035-a573679ec5c6 h1:VivLBgQMYjtPLzDpYkdQctxbPw0xNnN5sQweGlBAvws=
 github.com/rityak/restls-client-go v0.0.0-20261015085035-a573679ec5c6/go.mod h1:BN/U52vPw7j8VTSh2vleD/MnmVKCov84mS5VcjVHH4g=
-github.com/rityak/sing v0.5.9-0.20261025041621-d2aa8f83bd64 h1:Dc0x7jWLe9S7sLh3m1h54fO1ndwYEjQwc42VTamtA2E=
-github.com/rityak/sing v0.5.9-0.20261025041621-d2aa8f83bd64/go.mod h1:ypf0mjwlZm0sKdQSY+yQvmsbWa0hNPtkeqyRMGgoN+w=
+github.com/rityak/sing v0.5.9-0.20261025051953-888f93af6384 h1:Hzx8sYD87JBbZfTQAh02CypaISWxUybI0NzjdgqZTLQ=
+github.com/rityak/sing v0.5.9-0.20261025051953-888f93af6384/go.mod h1:ypf0mjwlZm0sKdQSY+yQvmsbWa0hNPtkeqyRMGgoN+w=
 github.com/rityak/sing-quic v0.0.0-20261024022751-8976f4842fa4 h1:kDb/HxvIIwy6ceQJO3wm/kvYBbqD8qgkr0/NsYqsBmM=
 github.com/rityak/sing-quic v0.0.0-20261024022751-8976f4842fa4/go.mod h1:6ayFGfzzBE85csgQkM3gf4neFq6s0losHlPRSxY+nuk=
 github.com/rityak/sing-shadowsocks v0.2.14-0.20261017012150-41461b750ad8 h1:m6vOH4hzRcaoVFQe8SiMdsFe5HEGyWYCwynQRLNEfR8=

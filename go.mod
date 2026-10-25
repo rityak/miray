@@ -168,4 +168,4 @@ replace github.com/metacubex/sing-shadowsocks => github.com/rityak/sing-shadowso
 
 replace github.com/metacubex/sing-shadowsocks2 => github.com/rityak/sing-shadowsocks2 v0.2.9-0.20261017012153-da4a7a72dbf5
 
-replace github.com/metacubex/sing => github.com/rityak/sing v0.5.9-0.20261025041621-d2aa8f83bd64
+replace github.com/metacubex/sing => github.com/rityak/sing v0.5.9-0.20261025051953-888f93af6384
