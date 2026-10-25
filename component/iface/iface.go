@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net"
 	"net/netip"
+	"sync/atomic"
 	"time"
 
 	"github.com/metacubex/mihomo/common/singledo"
@@ -146,8 +147,16 @@ func IsLocalIp(addr netip.Addr) (bool, error) {
 	return ok, nil
 }
 
+// generation counts flushes: the network changed (default interface monitor) or the
+// config was reloaded. What was learned about the network before is stale (T-135).
+var generation atomic.Uint64
+
+// Generation is the network generation; it changes with every FlushCache.
+func Generation() uint64 { return generation.Load() }
+
 func FlushCache() {
 	caches.Reset()
+	generation.Add(1)
 }
 
 func (iface *Interface) PickIPv4Addr(destination netip.Addr) (netip.Prefix, error) {

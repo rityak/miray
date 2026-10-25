@@ -31,8 +31,8 @@ func (f *Fallback) Now() string {
 // DialContext implements C.ProxyAdapter
 func (f *Fallback) DialContext(ctx context.Context, metadata *C.Metadata) (C.Conn, error) {
 	proxy := f.findAliveProxy(true)
-	c, proxy, err := failover(ctx, f.GroupBase, proxy, f.next,
-		func(p C.Proxy) (C.Conn, error) { return p.DialContext(ctx, metadata) }, nil, f.healthCheck)
+	c, proxy, err := failover(ctx, f.GroupBase, proxy, f.testUrl, f.next,
+		func(ctx context.Context, p C.Proxy) (C.Conn, error) { return p.DialContext(ctx, metadata) }, nil, f.healthCheck)
 	if err == nil {
 		c.AppendToChains(f)
 	} else {
@@ -55,8 +55,10 @@ func (f *Fallback) DialContext(ctx context.Context, metadata *C.Metadata) (C.Con
 // ListenPacketContext implements C.ProxyAdapter
 func (f *Fallback) ListenPacketContext(ctx context.Context, metadata *C.Metadata) (C.PacketConn, error) {
 	proxy := f.findAliveProxy(true)
-	pc, _, err := failover(ctx, f.GroupBase, proxy, f.next,
-		func(p C.Proxy) (C.PacketConn, error) { return p.ListenPacketContext(ctx, metadata) }, nil, f.healthCheck)
+	pc, _, err := failover(ctx, f.GroupBase, proxy, f.testUrl, f.next,
+		func(ctx context.Context, p C.Proxy) (C.PacketConn, error) {
+			return p.ListenPacketContext(ctx, metadata)
+		}, nil, f.healthCheck)
 	if err == nil {
 		pc.AppendToChains(f)
 	}
@@ -104,9 +106,9 @@ func (f *Fallback) Unwrap(metadata *C.Metadata, touch bool) C.Proxy {
 	return proxy
 }
 
-// next is the first usable node in order but skip, for a failover (T-129).
-func (f *Fallback) next(skip C.Proxy) C.Proxy {
-	return f.nextUsable(f.GetProxies(false), f.testUrl, skip)
+// next lists the usable nodes but skip in the group's order, for a failover (T-135).
+func (f *Fallback) next(skip C.Proxy) []C.Proxy {
+	return f.usable(f.GetProxies(false), f.testUrl, skip)
 }
 
 func (f *Fallback) findAliveProxy(touch bool) C.Proxy {
