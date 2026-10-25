@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"sort"
 	"time"
 
 	"github.com/metacubex/mihomo/common/callback"
@@ -56,8 +57,8 @@ func (u *URLTest) ForceSet(name string) {
 // DialContext implements C.ProxyAdapter
 func (u *URLTest) DialContext(ctx context.Context, metadata *C.Metadata) (c C.Conn, err error) {
 	proxy := u.fast(true)
-	c, proxy, err = failover(ctx, u.GroupBase, proxy, u.next,
-		func(p C.Proxy) (C.Conn, error) { return p.DialContext(ctx, metadata) }, u.fastSingle.Reset, u.healthCheck)
+	c, proxy, err = failover(ctx, u.GroupBase, proxy, u.testUrl, u.next,
+		func(ctx context.Context, p C.Proxy) (C.Conn, error) { return p.DialContext(ctx, metadata) }, u.fastSingle.Reset, u.healthCheck)
 	if err == nil {
 		c.AppendToChains(u)
 	} else {
@@ -80,8 +81,10 @@ func (u *URLTest) DialContext(ctx context.Context, metadata *C.Metadata) (c C.Co
 // ListenPacketContext implements C.ProxyAdapter
 func (u *URLTest) ListenPacketContext(ctx context.Context, metadata *C.Metadata) (C.PacketConn, error) {
 	proxy := u.fast(true)
-	pc, proxy, err := failover(ctx, u.GroupBase, proxy, u.next,
-		func(p C.Proxy) (C.PacketConn, error) { return p.ListenPacketContext(ctx, metadata) }, u.fastSingle.Reset, u.healthCheck)
+	pc, proxy, err := failover(ctx, u.GroupBase, proxy, u.testUrl, u.next,
+		func(ctx context.Context, p C.Proxy) (C.PacketConn, error) {
+			return p.ListenPacketContext(ctx, metadata)
+		}, u.fastSingle.Reset, u.healthCheck)
 	if err == nil {
 		pc.AppendToChains(u)
 	} else {
@@ -96,18 +99,14 @@ func (u *URLTest) Unwrap(metadata *C.Metadata, touch bool) C.Proxy {
 	return u.fast(touch)
 }
 
-// next is the fastest usable node but skip, for a failover (T-129).
-func (u *URLTest) next(skip C.Proxy) C.Proxy {
-	var best C.Proxy
-	for _, p := range u.GetProxies(false) {
-		if p == skip || !p.AliveForTestUrl(u.testUrl) || u.down.has(p) {
-			continue
-		}
-		if best == nil || p.LastDelayForTestUrl(u.testUrl) < best.LastDelayForTestUrl(u.testUrl) {
-			best = p
-		}
-	}
-	return best
+// next lists the usable nodes but skip, fastest first, for a failover; it changes neither
+// the fastest node nor the tolerance state (T-135).
+func (u *URLTest) next(skip C.Proxy) []C.Proxy {
+	alts := u.usable(u.GetProxies(false), u.testUrl, skip)
+	sort.SliceStable(alts, func(i, j int) bool {
+		return alts[i].LastDelayForTestUrl(u.testUrl) < alts[j].LastDelayForTestUrl(u.testUrl)
+	})
+	return alts
 }
 
 func (u *URLTest) healthCheck() {

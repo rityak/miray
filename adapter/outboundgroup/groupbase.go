@@ -34,7 +34,8 @@ type GroupBase struct {
 	testTimeout       int
 	maxFailedTimes    int
 	emptyFallback     C.Proxy
-	down              downNodes // nodes set aside after a failover (T-129)
+	down              downNodes    // nodes set aside after a failover (T-129)
+	lostRaces         atomic.Int32 // races the group's node lost in a row (T-135)
 
 	// for GetProxies
 	getProxiesMutex  sync.Mutex
@@ -306,6 +307,7 @@ func (gb *GroupBase) healthCheck() {
 	}
 
 	gb.failedTesting.Store(true)
+	checkStart := time.Now()
 	wg := sync.WaitGroup{}
 	for _, proxyProvider := range gb.providers {
 		wg.Add(1)
@@ -317,6 +319,12 @@ func (gb *GroupBase) healthCheck() {
 	}
 
 	wg.Wait()
+	for _, pd := range gb.providers {
+		if pd.HealthCheckURL() != "" { // a check ran: its verdict decides for the nodes set aside (T-135)
+			gb.down.settled(checkStart)
+			break
+		}
+	}
 	gb.failedTesting.Store(false)
 	gb.failedTimes = 0
 }
