@@ -24,7 +24,9 @@ type minuteStats struct {
 
 type nodeStats struct {
 	tcp, udp, fail, retried, racesLost, udpDrops int
+	halfclose, closedByCore, quicIdle            int
 	up, down                                     int64
+	upPeak, downPeak                             float64 // Mbit/s of the fastest connection of 1 MiB or more
 	connect, handshake, ttfb                     []float64
 }
 
@@ -83,13 +85,20 @@ func (m *minuteStats) roll(now time.Time) [][]byte {
 		for _, c := range []struct {
 			k string
 			v int
-		}{{"tcp", n.tcp}, {"udp", n.udp}, {"fail", n.fail}, {"retried", n.retried}, {"races_lost", n.racesLost}, {"udp_drops", n.udpDrops}} {
+		}{{"tcp", n.tcp}, {"udp", n.udp}, {"fail", n.fail}, {"retried", n.retried}, {"races_lost", n.racesLost},
+			{"udp_drops", n.udpDrops}, {"closed_by_core", n.closedByCore}, {"halfclose", n.halfclose}, {"quic_idle", n.quicIdle}} {
 			if c.v != 0 {
 				kv = append(kv, c.k, c.v)
 			}
 		}
 		if n.up != 0 || n.down != 0 {
 			kv = append(kv, "up", n.up, "down", n.down)
+		}
+		if n.downPeak != 0 {
+			kv = append(kv, "down_mbps", round1(n.downPeak))
+		}
+		if n.upPeak != 0 {
+			kv = append(kv, "up_mbps", round1(n.upPeak))
 		}
 		if p := percentiles(n.connect); p != nil {
 			kv = append(kv, "connect_ms", p)

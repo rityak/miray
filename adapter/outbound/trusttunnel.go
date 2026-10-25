@@ -104,6 +104,7 @@ func NewTrustTunnel(option TrustTunnelOption) (*TrustTunnel, error) {
 	outbound.dialer = option.NewDialer(outbound.DialOptions())
 
 	tOption := trusttunnel.ClientOptions{
+		Name:                  option.Name,
 		Dialer:                outbound.dialer,
 		DialOptions:           outbound.DialOptions,
 		Server:                addr,

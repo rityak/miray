@@ -241,7 +241,7 @@ func TestUDPOneWayDropsAndRebind(t *testing.T) {
 	}
 	drops := collect(t, "udp.drop", m)
 	if len(drops) != 1 || drops[0]["queue_late"] != float64(1) || drops[0]["write_err"] != float64(1) ||
-		strings.Contains(drops[0]["err"].(string), "203.0") {
+		strings.Contains(drops[0]["write_error"].(string), "203.0") {
 		t.Fatalf("drops %v", drops)
 	}
 	if got := collect(t, "udp.rebind", m); len(got) != 1 || got[0]["idle_s"] != float64(60) {
@@ -315,4 +315,60 @@ func TestRelayReportsLostHalfClose(t *testing.T) {
 	if !r.UpHalfLost || r.UpErr != nil || r.DownErr == nil {
 		t.Fatalf("%+v", r)
 	}
+}
+
+// What the core did itself is not an anomaly: a connection it closed (a proxy switch,
+// the API), a stream or request it canceled, a half close through a TUN, a lost DNS race.
+func TestOwnClosesAreNotAnomalies(t *testing.T) {
+	m := mark()
+	now := time.Now()
+	local := errors.New("H3_REQUEST_CANCELLED (local)")
+
+	e := end("tt", 100, 5000, time.Minute, RelayResult{DownErr: local, DownRemote: true, DownAt: now, UpAt: now, DownFirst: true, FirstEnd: 10})
+	TCPClosed(e) // canceled by this process
+
+	e = end("tt", 100, 0, time.Minute, RelayResult{DownErr: errors.New("read: connection reset by peer"), DownRemote: true,
+		DownAt: now, UpAt: now, DownFirst: true, FirstEnd: 10})
+	e.State.closed.Store(5) // closed from outside before the relay ended
+	TCPClosed(e)
+
+	e = end("tt", 100, 5000, time.Minute, RelayResult{UpAt: now, DownAt: now, DownErr: net.ErrClosed, UpHalfLost: true, FirstEnd: 10})
+	TCPClosed(e) // the client closed, the proxy side has no CloseWrite
+
+	DNS("223.5.5.5:53", "example.org.", "A", 40*time.Millisecond, errors.New("Application error 0x1 (local)"), -1, false)
+
+	conn := &UDPState{}
+	conn.End(net.ErrClosed)
+	UDPClosed(UDPEnd{Dial: Dial{Network: "udp"}, Chain: []string{"tt"}, Key: "k2", Start: now, Up: 1200, Conn: conn})
+
+	sender := &UDPState{}
+	sender.QueueDrop()
+	UDPClosed(UDPEnd{Dial: Dial{Network: "udp"}, Chain: []string{"tt"}, Key: "k3", Start: now, Up: 1200, Down: 300, Sender: sender, Idle: true})
+
+	g := "g" + strconv.FormatInt(time.Now().UnixNano(), 10)
+	GroupPick(g, "COMPATIBLE")
+	GroupPick(g, "a")
+
+	for _, k := range []string{"tcp.reset", "tcp.silent", "tcp.stall", "tcp.halfclose", "dns.fail", "udp.oneway", "udp.drop", "group.switch"} {
+		if got := collect(t, k, m); len(got) != 0 {
+			t.Errorf("%s: %v", k, got)
+		}
+	}
+}
+
+func TestPeakSpeedInTheMinuteRecord(t *testing.T) {
+	summary.roll(time.Now())
+	e := end("fast", 1<<20, 50<<20, 4*time.Second, RelayResult{FirstEnd: 1})
+	TCPClosed(e)
+	for _, line := range summary.roll(time.Now()) {
+		var r map[string]any
+		_ = json.Unmarshal(line, &r)
+		if r["node"] == "fast" {
+			if v, _ := r["down_mbps"].(float64); v < 100 || v > 110 {
+				t.Fatalf("down_mbps %v", r)
+			}
+			return
+		}
+	}
+	t.Fatal("no minute record of the node")
 }

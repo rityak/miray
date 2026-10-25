@@ -97,6 +97,10 @@ func class(err error) string {
 		return "closed"
 	}
 	s := strings.ToLower(err.Error())
+	// closed or canceled by this process: a stream we reset, a request we canceled
+	if strings.Contains(s, "(local)") || strings.Contains(s, "by local") || strings.Contains(s, "response body closed") {
+		return "local"
+	}
 	if i := strings.Index(s, "tls: "); i >= 0 {
 		alert := s[i+5:]
 		if j := strings.IndexAny(alert, ",;("); j >= 0 {
@@ -125,4 +129,14 @@ func class(err error) string {
 		return "eof"
 	}
 	return "other"
+}
+
+// ours is an error class this process caused: its own close or cancel, not the proxy.
+// aborted is WSAECONNABORTED on Windows: the local stack dropped a socket we closed.
+func ours(class string) bool {
+	switch class {
+	case "closed", "canceled", "local", "aborted":
+		return true
+	}
+	return false
 }

@@ -129,6 +129,9 @@ func (tt *tcpTracker) UnwrapWriter() (io.Writer, []N.CountFunc) {
 }
 
 func (tt *tcpTracker) Close() error {
+	if diag.Enabled {
+		tt.diag.Closed()
+	}
 	tt.manager.Leave(tt)
 	return tt.Conn.Close()
 }

@@ -26,6 +26,7 @@ import (
 type DialOptionsFunc func() []dialer.Option
 
 type ClientOptions struct {
+	Name                  string // the proxy, for the diagnostics journal (T-138)
 	Dialer                C.Dialer
 	DialOptions           DialOptionsFunc // for quic
 	Server                string
@@ -43,6 +44,7 @@ type ClientOptions struct {
 }
 
 type Client struct {
+	name             string
 	ctx              context.Context
 	dialer           C.Dialer
 	dialOptions      DialOptionsFunc
@@ -57,6 +59,7 @@ type Client struct {
 
 func NewClient(ctx context.Context, options ClientOptions) (client *Client, err error) {
 	client = &Client{
+		name:        options.Name,
 		ctx:         ctx,
 		dialer:      options.Dialer,
 		dialOptions: options.DialOptions,

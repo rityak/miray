@@ -31,6 +31,7 @@ type ConnState struct{}
 
 func (*ConnState) Up(int64)   {}
 func (*ConnState) Down(int64) {}
+func (*ConnState) Closed()    {}
 
 // UDPState counts the datagrams of a UDP session that never left.
 type UDPState struct{}
@@ -39,6 +40,7 @@ func (*UDPState) QueueDrop()     {}
 func (*UDPState) FullDrop()      {}
 func (*UDPState) WriteErr(error) {}
 func (*UDPState) SetIdle()       {}
+func (*UDPState) End(error)      {}
 func (*UDPState) IsIdle() bool   { return false }
 
 func DialFailed(*Trace, Dial, error)                              {}

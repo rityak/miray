@@ -531,6 +531,9 @@ func handleUDPToLocal(writeBack C.WriteBack, pc *udpActivityConn, sender C.Packe
 			if put != nil {
 				put() // a partial read can carry a buffer together with the error
 			}
+			if diag.Enabled {
+				pc.diag.End(err)
+			}
 			return
 		}
 		lastRead.Store(time.Now().UnixNano())

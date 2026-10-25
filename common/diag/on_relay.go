@@ -6,7 +6,6 @@ import (
 	"errors"
 	"io"
 	"net"
-	"sync/atomic"
 	"time"
 
 	"github.com/metacubex/mihomo/common/handicap"
@@ -27,8 +26,7 @@ func Relay(leftConn, rightConn net.Conn) (r RelayResult) {
 
 	ch := make(chan struct{})
 	var downHalf bool
-	var order atomic.Int32 // which direction finished first: the clock may not tell them apart
-	var downOrder int32
+	var downOrder int64 // which direction finished first: the clock may not tell them apart
 	go func() {
 		_, err := bufio.Copy(leftConn, rightConn)
 		r.DownErr, r.DownAt, downOrder = err, time.Now(), order.Add(1)
@@ -56,9 +54,17 @@ func Relay(leftConn, rightConn net.Conn) (r RelayResult) {
 	// a direction finished cleanly, the other side had no half close and the opposite
 	// direction ended in an error after it: it was cut
 	r.DownFirst = downOrder < upOrder
+	r.FirstEnd = min64(downOrder, upOrder)
 	r.UpHalfLost = r.UpErr == nil && !upHalf && r.DownErr != nil && !r.DownFirst
 	r.DownHalfLost = r.DownErr == nil && !downHalf && r.UpErr != nil && r.DownFirst
 	return r
+}
+
+func min64(a, b int64) int64 {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 // closeWrite is common/net's: CloseWrite when the connection has it, else Close. It
