@@ -23,7 +23,19 @@ func (w *writeBackProxy) ReplyConn() any {
 	return nil
 }
 
+// writeBackSource is a WriteBack whose datagrams of one connection share a writer.
+type writeBackSource interface{ WriteBackSource() any }
+
+// UpdateWriteBack keeps the current writer when wb writes through the same one (the
+// datagrams of a packet connection): storing every datagram's allocated (T-128).
 func (w *writeBackProxy) UpdateWriteBack(wb C.WriteBack) {
+	if s, ok := wb.(writeBackSource); ok {
+		if src := s.WriteBackSource(); src != nil {
+			if cur, ok := w.wb.Load().(writeBackSource); ok && cur.WriteBackSource() == src {
+				return
+			}
+		}
+	}
 	w.wb.Store(wb)
 }
 

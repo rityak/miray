@@ -320,6 +320,14 @@ func (s *packetAdapter) Key() string {
 	return s.key
 }
 
+// WriteBackSource passes on the writer the packet's connection shares, if any (T-128).
+func (s *packetAdapter) WriteBackSource() any {
+	if w, ok := s.UDPPacket.(interface{ WriteBackSource() any }); ok {
+		return w.WriteBackSource()
+	}
+	return nil
+}
+
 // ReplyConn passes on the batching listener socket of the packet, if any (T-068).
 func (s *packetAdapter) ReplyConn() any {
 	if r, ok := s.UDPPacket.(interface{ ReplyConn() any }); ok {

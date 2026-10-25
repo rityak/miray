@@ -396,3 +396,9 @@ func (c *packet) Drop() {
 func (c *packet) InAddr() net.Addr {
 	return c.lAddr
 }
+
+// WriteBackSource is the writer all datagrams of the packet's connection write back
+// through (T-128); NewPacket gives each datagram its own.
+func (c *packet) WriteBackSource() any {
+	return c.writer
+}
