@@ -268,7 +268,7 @@ func NewMasque(option MasqueOption) (*Masque, error) {
 
 func (w *Masque) dialQuic(ctx context.Context) (net.PacketConn, *quic.Conn, error) {
 	// without ConnectionIDLength set, backend occasionally throws PROTOCOL_VIOLATION and that closes our connection
-	pc, quicConn, err := common.DialQuic(ctx, w.addr, w.DialOptions(), w.dialer, w.tlsConfig, w.quicConfig, common.DialQuicOption{ConnectionIDLength: 20})
+	pc, quicConn, err := common.DialQuic(ctx, w.addr, w.DialOptions(), w.dialer, w.tlsConfig, w.quicConfig, common.DialQuicOption{ConnectionIDLength: 20, Name: w.Name()})
 	if err != nil {
 		return nil, nil, err
 	}

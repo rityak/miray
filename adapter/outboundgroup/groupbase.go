@@ -10,6 +10,7 @@ import (
 
 	"github.com/metacubex/mihomo/adapter/outbound"
 	"github.com/metacubex/mihomo/common/atomic"
+	"github.com/metacubex/mihomo/common/diag"
 	"github.com/metacubex/mihomo/common/utils"
 	C "github.com/metacubex/mihomo/constant"
 	P "github.com/metacubex/mihomo/constant/provider"
@@ -275,6 +276,9 @@ func (gb *GroupBase) onDialFailed(adapterType C.AdapterType, err error, fn func(
 
 	go func() {
 		if strings.Contains(err.Error(), "connection refused") {
+			if diag.Enabled {
+				diag.GroupCheck(gb.Name(), "refused")
+			}
 			fn()
 			return
 		}
@@ -295,6 +299,9 @@ func (gb *GroupBase) onDialFailed(adapterType C.AdapterType, err error, fn func(
 			log.Debugln("ProxyGroup: %s failed count: %d", gb.Name(), gb.failedTimes)
 			if gb.failedTimes >= gb.maxFailedTimes {
 				log.Warnln("because %s failed multiple times, activate health check", gb.Name())
+				if diag.Enabled {
+					diag.GroupCheck(gb.Name(), "dial_failures")
+				}
 				fn()
 			}
 		}
@@ -327,6 +334,16 @@ func (gb *GroupBase) healthCheck() {
 	}
 	gb.failedTesting.Store(false)
 	gb.failedTimes = 0
+	if diag.Enabled {
+		proxies := gb.GetProxies(false)
+		alive := 0
+		for _, p := range proxies {
+			if p.AliveForTestUrl("") {
+				alive++
+			}
+		}
+		diag.GroupChecked(gb.Name(), alive, len(proxies))
+	}
 }
 
 func (gb *GroupBase) onDialSuccess() {

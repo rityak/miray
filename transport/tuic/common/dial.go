@@ -6,6 +6,7 @@ import (
 	"net/netip"
 	"time"
 
+	"github.com/metacubex/mihomo/common/diag"
 	"github.com/metacubex/mihomo/component/dialer"
 
 	"github.com/metacubex/quic-go"
@@ -19,6 +20,7 @@ type PacketDialer interface {
 type DialQuicOption struct {
 	Early              bool
 	ConnectionIDLength int
+	Name               string // the proxy, for the diagnostics journal (T-138)
 }
 
 func DialQuic(ctx context.Context, address string, opts []dialer.Option, pDialer PacketDialer, tlsConf *tls.Config, conf *quic.Config, option DialQuicOption) (net.PacketConn, *quic.Conn, error) {
@@ -60,6 +62,9 @@ func DialQuic(ctx context.Context, address string, opts []dialer.Option, pDialer
 		return nil, nil, err
 	}
 	nc := c.(quicNetConn)
+	if diag.Enabled {
+		diag.WatchQUIC(option.Name, nc.Conn, time.Now())
+	}
 	return nc.pc, nc.Conn, nil
 }
 

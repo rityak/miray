@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/metacubex/mihomo/adapter/inbound"
+	"github.com/metacubex/mihomo/common/diag"
 	"github.com/metacubex/mihomo/component/dialer"
 	"github.com/metacubex/mihomo/component/iface"
 	"github.com/metacubex/mihomo/component/resolver"
@@ -368,8 +369,14 @@ func New(options LC.Tun, tunnel C.Tunnel, additions ...inbound.Addition) (l *Lis
 		defaultInterfaceMonitor.RegisterCallback(func(defaultInterface *control.Interface, event int) {
 			if defaultInterface != nil {
 				log.Warnln("[TUN] default interface changed by monitor, => %s", defaultInterface.Name)
+				if diag.Enabled {
+					diag.NetChange(defaultInterface.Name)
+				}
 			} else {
 				log.Errorln("[TUN] default interface lost by monitor")
+				if diag.Enabled {
+					diag.NetChange("")
+				}
 			}
 			iface.FlushCache()
 			resolver.ResetConnection() // reset resolver's connection after default interface changed

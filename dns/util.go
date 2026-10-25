@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/metacubex/mihomo/common/diag"
 	"github.com/metacubex/mihomo/common/picker"
 	"github.com/metacubex/mihomo/component/ech/echparser"
 	"github.com/metacubex/mihomo/component/resolver"
@@ -426,7 +427,18 @@ func batchExchange(ctx context.Context, clients []dnsClient, m *D.Msg) (msg *D.M
 		client := client // shadow define client to ensure the value captured by the closure will not be changed in the next loop
 		fast.Go(func() (*D.Msg, error) {
 			log.Debugln("[DNS] resolve %s %s from %s", domain, qTypeStr, client.Address())
+			var start time.Time
+			if diag.Enabled {
+				start = time.Now()
+			}
 			m, err := client.ExchangeContext(ctx, m)
+			if diag.Enabled {
+				rcode, truncated := -1, false
+				if m != nil {
+					rcode, truncated = m.Rcode, m.Truncated
+				}
+				diag.DNS(client.Address(), domain, qTypeStr, time.Since(start), err, rcode, truncated)
+			}
 			if err != nil {
 				return nil, err
 			} else if cache && (m.Rcode == D.RcodeServerFailure || m.Rcode == D.RcodeRefused) {

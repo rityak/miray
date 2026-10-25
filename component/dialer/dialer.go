@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/metacubex/mihomo/common/atomic"
+	"github.com/metacubex/mihomo/common/diag"
 	"github.com/metacubex/mihomo/component/keepalive"
 	"github.com/metacubex/mihomo/component/mptcp"
 	"github.com/metacubex/mihomo/component/resolver"
@@ -37,7 +38,10 @@ func GetTcpConcurrent() bool {
 	return tcpConcurrent.Load()
 }
 
-func DialContext(ctx context.Context, network, address string, options ...Option) (net.Conn, error) {
+func DialContext(ctx context.Context, network, address string, options ...Option) (conn net.Conn, err error) {
+	if diag.Enabled {
+		defer func(start time.Time) { diag.Connected(ctx, start, err) }(time.Now())
+	}
 	opt := applyOptions(options...)
 
 	if opt.network == 4 || opt.network == 6 {
@@ -52,6 +56,9 @@ func DialContext(ctx context.Context, network, address string, options ...Option
 
 	ips, port, err := parseAddr(ctx, network, address, opt.resolver)
 	if err != nil {
+		if diag.Enabled {
+			diag.ServerDNSFailed(ctx)
+		}
 		return nil, err
 	}
 	// shortcut: custom dialers retain their context; audit stream lifetimes before canceling their pending dials.

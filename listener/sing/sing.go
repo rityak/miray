@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/metacubex/mihomo/adapter/inbound"
+	"github.com/metacubex/mihomo/common/diag"
 	N "github.com/metacubex/mihomo/common/net"
 	"github.com/metacubex/mihomo/common/utils"
 	C "github.com/metacubex/mihomo/constant"
@@ -311,6 +312,9 @@ func (h *ListenerHandler) handlePacket(cPacket *packet, source M.Socksaddr, dest
 
 func (h *ListenerHandler) NewError(ctx context.Context, err error) {
 	log.Warnln("%s listener get error: %+v", h.Type.String(), err)
+	if diag.Enabled && h.Type == C.TUN {
+		diag.TunError(err)
+	}
 }
 
 func (h *ListenerHandler) TypeMutation(typ C.Type) *ListenerHandler {

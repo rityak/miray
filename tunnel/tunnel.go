@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/metacubex/mihomo/common/atomic"
+	"github.com/metacubex/mihomo/common/diag"
 	"github.com/metacubex/mihomo/common/lru"
 	N "github.com/metacubex/mihomo/common/net"
 	"github.com/metacubex/mihomo/common/utils"
@@ -605,6 +606,9 @@ func handleUDPConn(packet C.PacketAdapter) {
 	if !metadata.Valid() {
 		packet.Drop()
 		log.Warnln("[Metadata] not valid: %#v", metadata)
+		if diag.Enabled {
+			diag.Dropped("invalid_metadata", diagDial(metadata, nil, nil))
+		}
 		return
 	}
 	fixMetadata(metadata) // fix some metadata not set via metadata.SetRemoteAddr or metadata.SetRemoteAddress
@@ -627,6 +631,9 @@ func handleUDPConn(packet C.PacketAdapter) {
 	if err := preHandleMetadata(metadata.Clone()); err != nil { // precheck without modify metadata
 		packet.Drop()
 		log.Debugln("[Metadata PreHandle] error: %s", err)
+		if diag.Enabled {
+			diag.Dropped("no_fakeip_record", diagDial(metadata, nil, nil))
+		}
 		return
 	}
 
@@ -652,21 +659,38 @@ func handleUDPConn(packet C.PacketAdapter) {
 			proxy, rule, err := resolveMetadata(metadata)
 			if err != nil {
 				log.Warnln("[UDP] Parse metadata failed: %s", err.Error())
+				if diag.Enabled {
+					diag.Dropped("rule_error", diagDial(metadata, nil, nil))
+				}
 				return nil, nil, err
 			}
 
 			dialMetadata := metadata.Pure()
 			ctx, cancel := context.WithTimeout(context.Background(), C.DefaultUDPTimeout)
 			defer cancel()
+			var trace *diag.Trace
+			if diag.Enabled {
+				ctx, trace = diag.WithTrace(ctx)
+			}
 			rawPc, err := retry(ctx, func(ctx context.Context) (C.PacketConn, error) {
 				return proxy.ListenPacketContext(ctx, dialMetadata)
 			}, func(err error) {
 				logMetadataErr(metadata, rule, proxy, err)
+				if diag.Enabled {
+					trace.Failed(err)
+				}
 			})
 			if err != nil {
+				if diag.Enabled {
+					diag.DialFailed(trace, diagDial(metadata, rule, proxy), err)
+				}
 				return nil, nil, err
 			}
 			logMetadata(metadata, rule, rawPc)
+			if diag.Enabled {
+				diag.DialDone(trace, diagDial(metadata, rule, proxy), rawPc.Chains())
+				diag.UDPStarted(diagFlow(metadata), diagDial(metadata, rule, proxy))
+			}
 
 			pc := &udpActivityConn{PacketConn: statistic.NewUDPTracker(rawPc, statistic.DefaultManager, metadata, rule, 0, 0, true)}
 
@@ -726,6 +750,9 @@ func handleTCPConn(connCtx C.ConnContext) {
 	metadata := connCtx.Metadata()
 	if !metadata.Valid() {
 		log.Warnln("[Metadata] not valid: %#v", metadata)
+		if diag.Enabled {
+			diag.Dropped("invalid_metadata", diagDial(metadata, nil, nil))
+		}
 		return
 	}
 	fixMetadata(metadata) // fix some metadata not set via metadata.SetRemoteAddr or metadata.SetRemoteAddress
@@ -751,6 +778,9 @@ func handleTCPConn(connCtx C.ConnContext) {
 	if preHandleFailed {
 		log.Debugln("[Metadata PreHandle] failed to sniff a domain for connection %s --> %s, give up",
 			metadata.SourceDetail(), metadata.RemoteAddress())
+		if diag.Enabled {
+			diag.Dropped("no_fakeip_record", diagDial(metadata, nil, nil))
+		}
 		return
 	}
 
@@ -773,6 +803,9 @@ func handleTCPConn(connCtx C.ConnContext) {
 	proxy, rule, err := resolveMetadata(metadata)
 	if err != nil {
 		log.Warnln("[Metadata] parse failed: %s", err.Error())
+		if diag.Enabled {
+			diag.Dropped("rule_error", diagDial(metadata, nil, nil))
+		}
 		return
 	}
 
@@ -792,6 +825,10 @@ func handleTCPConn(connCtx C.ConnContext) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), C.DefaultTCPTimeout)
 	defer cancel()
+	var trace *diag.Trace
+	if diag.Enabled {
+		ctx, trace = diag.WithTrace(ctx)
+	}
 	remoteConn, err := retry(ctx, func(ctx context.Context) (remoteConn C.Conn, err error) {
 		remoteConn, err = proxy.DialContext(ctx, dialMetadata)
 		if err != nil {
@@ -825,8 +862,14 @@ func handleTCPConn(connCtx C.ConnContext) {
 		return
 	}, func(err error) {
 		logMetadataErr(metadata, rule, proxy, err)
+		if diag.Enabled {
+			trace.Failed(err)
+		}
 	})
 	if err != nil {
+		if diag.Enabled {
+			diag.DialFailed(trace, diagDial(metadata, rule, proxy), err)
+		}
 		// inbounds with a deferred response (hysteria2) send the failure to the client (T-102)
 		_ = network.ReportHandshakeFailure(conn, err)
 		return
@@ -839,6 +882,9 @@ func handleTCPConn(connCtx C.ConnContext) {
 		return
 	}
 	logMetadata(metadata, rule, remoteConn)
+	if diag.Enabled {
+		diag.DialDone(trace, diagDial(metadata, rule, proxy), remoteConn.Chains())
+	}
 
 	remoteConn = statistic.NewTCPTracker(remoteConn, statistic.DefaultManager, metadata, rule, int64(peekLen), 0, true)
 	defer func(remoteConn C.Conn) {
@@ -849,6 +895,10 @@ func handleTCPConn(connCtx C.ConnContext) {
 	peekMutex.Lock()
 	defer peekMutex.Unlock()
 	_ = conn.SetReadDeadline(time.Time{}) // reset
+	if diag.Enabled {
+		diagRelay(conn, remoteConn)
+		return
+	}
 	handleSocket(conn, remoteConn)
 }
 

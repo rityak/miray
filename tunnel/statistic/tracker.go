@@ -7,6 +7,7 @@ import (
 
 	"github.com/metacubex/mihomo/common/atomic"
 	"github.com/metacubex/mihomo/common/buf"
+	"github.com/metacubex/mihomo/common/diag"
 	N "github.com/metacubex/mihomo/common/net"
 	"github.com/metacubex/mihomo/common/utils"
 	C "github.com/metacubex/mihomo/constant"
@@ -37,6 +38,7 @@ type TrackerInfo struct {
 type tcpTracker struct {
 	C.Conn `json:"-"`
 	*TrackerInfo
+	diag    diag.ConnState // zero-size without the miraydiag tag (T-138)
 	manager *Manager
 
 	pushToManager bool `json:"-"`
@@ -53,6 +55,9 @@ func (tt *tcpTracker) Info() *TrackerInfo {
 func (tt *tcpTracker) Read(b []byte) (int, error) {
 	n, err := tt.Conn.Read(b)
 	download := int64(n)
+	if diag.Enabled {
+		tt.diag.Down(download)
+	}
 	if tt.pushToManager {
 		tt.manager.PushDownloaded(download)
 	}
@@ -63,6 +68,9 @@ func (tt *tcpTracker) Read(b []byte) (int, error) {
 func (tt *tcpTracker) ReadBuffer(buffer *buf.Buffer) (err error) {
 	err = tt.Conn.ReadBuffer(buffer)
 	download := int64(buffer.Len())
+	if diag.Enabled {
+		tt.diag.Down(download)
+	}
 	if tt.pushToManager {
 		tt.manager.PushDownloaded(download)
 	}
@@ -72,6 +80,9 @@ func (tt *tcpTracker) ReadBuffer(buffer *buf.Buffer) (err error) {
 
 func (tt *tcpTracker) UnwrapReader() (io.Reader, []N.CountFunc) {
 	return tt.Conn, []N.CountFunc{func(download int64) {
+		if diag.Enabled {
+			tt.diag.Down(download)
+		}
 		if tt.pushToManager {
 			tt.manager.PushDownloaded(download)
 		}
@@ -82,6 +93,9 @@ func (tt *tcpTracker) UnwrapReader() (io.Reader, []N.CountFunc) {
 func (tt *tcpTracker) Write(b []byte) (int, error) {
 	n, err := tt.Conn.Write(b)
 	upload := int64(n)
+	if diag.Enabled {
+		tt.diag.Up(upload)
+	}
 	if tt.pushToManager {
 		tt.manager.PushUploaded(upload)
 	}
@@ -92,6 +106,9 @@ func (tt *tcpTracker) Write(b []byte) (int, error) {
 func (tt *tcpTracker) WriteBuffer(buffer *buf.Buffer) (err error) {
 	upload := int64(buffer.Len())
 	err = tt.Conn.WriteBuffer(buffer)
+	if diag.Enabled {
+		tt.diag.Up(upload)
+	}
 	if tt.pushToManager {
 		tt.manager.PushUploaded(upload)
 	}
@@ -101,6 +118,9 @@ func (tt *tcpTracker) WriteBuffer(buffer *buf.Buffer) (err error) {
 
 func (tt *tcpTracker) UnwrapWriter() (io.Writer, []N.CountFunc) {
 	return tt.Conn, []N.CountFunc{func(upload int64) {
+		if diag.Enabled {
+			tt.diag.Up(upload)
+		}
 		if tt.pushToManager {
 			tt.manager.PushUploaded(upload)
 		}
@@ -115,6 +135,11 @@ func (tt *tcpTracker) Close() error {
 
 func (tt *tcpTracker) Upstream() any {
 	return tt.Conn
+}
+
+// DiagState is the connection's activity for the diagnostics journal (T-138).
+func (tt *tcpTracker) DiagState() *diag.ConnState {
+	return &tt.diag
 }
 
 func NewTCPTracker(conn C.Conn, manager *Manager, metadata *C.Metadata, rule C.Rule, uploadTotal int64, downloadTotal int64, pushToManager bool) *tcpTracker {
