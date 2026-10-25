@@ -24,7 +24,8 @@ func (c *Client) quicRoundTripper(tlsConfig *vmess.TLSConfig, congestionControlN
 		TLSClientConfig: stdConfig,
 		QUICConfig: &quic.Config{
 			Versions:                   []quic.Version{quic.Version1},
-			MaxIdleTimeout:             DefaultQuicMaxIdleTimeout,
+			MaxIdleTimeout:             quicMaxIdleTimeout,
+			KeepAlivePeriod:            DefaultQuicKeepAlivePeriod,
 			InitialStreamReceiveWindow: DefaultQuicStreamReceiveWindow,
 			DisablePathMTUDiscovery:    !(runtime.GOOS == "windows" || runtime.GOOS == "linux" || runtime.GOOS == "android" || runtime.GOOS == "darwin"),
 			Allow0RTT:                  false,
@@ -49,7 +50,7 @@ func (s *Service) configHTTP3Server(tlsConfig *tls.Config, udpConn net.PacketCon
 	tlsConfig = http3.ConfigureTLSConfig(tlsConfig)
 	quicListener, err := quic.ListenEarly(udpConn, tlsConfig, &quic.Config{
 		Versions:           []quic.Version{quic.Version1},
-		MaxIdleTimeout:     DefaultQuicMaxIdleTimeout,
+		MaxIdleTimeout:     quicMaxIdleTimeout,
 		MaxIncomingStreams: 1 << 60,
 		Allow0RTT:          true,
 	})

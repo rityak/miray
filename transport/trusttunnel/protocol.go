@@ -27,7 +27,14 @@ const (
 	DefaultHealthCheckTimeout      = 7 * time.Second
 	DefaultQuicMaxIdleTimeout      = 2 * (DefaultConnectionTimeout + DefaultHealthCheckTimeout)
 	DefaultSessionTimeout          = 30 * time.Second
+	// DefaultQuicKeepAlivePeriod is the keep-alive of quic-go's HTTP/3 client default
+	// config, which a custom QUIC config does not inherit: without it the connection
+	// closes by idle timeout with idle CONNECT streams open (RFC 9114 5.1).
+	DefaultQuicKeepAlivePeriod = 10 * time.Second
 )
+
+// quicMaxIdleTimeout is a variable for tests.
+var quicMaxIdleTimeout = DefaultQuicMaxIdleTimeout
 
 var (
 	AppName = C.Name
