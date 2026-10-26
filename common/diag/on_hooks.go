@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net"
 	"net/netip"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -497,7 +498,7 @@ func WatchQUIC(node string, conn *quic.Conn, start time.Time) {
 		<-conn.Context().Done()
 		cause := context.Cause(conn.Context())
 		st := conn.ConnectionStats()
-		var reason, code string
+		var reason, code, msg string
 		remote := false
 		var (
 			appErr       *quic.ApplicationError
@@ -510,12 +511,12 @@ func WatchQUIC(node string, conn *quic.Conn, start time.Time) {
 			if !appErr.Remote && appErr.ErrorCode == 0 {
 				return // our own close
 			}
-			reason, code, remote = "application", appErr.Error(), appErr.Remote
+			reason, code, msg, remote = "application", "0x"+strconv.FormatUint(uint64(appErr.ErrorCode), 16), appErr.ErrorMessage, appErr.Remote
 		case errors.As(cause, &transportErr):
 			if !transportErr.Remote && transportErr.ErrorCode == quic.NoError {
 				return
 			}
-			reason, code, remote = "transport", transportErr.ErrorCode.String(), transportErr.Remote
+			reason, code, msg, remote = "transport", transportErr.ErrorCode.String(), transportErr.ErrorMessage, transportErr.Remote
 		case errors.As(cause, &idleErr):
 			// an idle connection the client let expire, or a dead path: the stalls and
 			// failures of its connections tell them apart, so only counted
@@ -528,7 +529,7 @@ func WatchQUIC(node string, conn *quic.Conn, start time.Time) {
 		default:
 			reason, code = "other", scrub(cause.Error())
 		}
-		event("quic.close", node, "proto", protoOf(node), "reason", reason, "code", scrub(code), "remote", remote,
+		event("quic.close", node, "proto", protoOf(node), "reason", reason, "code", scrub(code), "msg", scrub(msg), "remote", remote,
 			"life_s", int(time.Since(start)/time.Second), "srtt_ms", round1(ms(st.SmoothedRTT)),
 			"min_rtt_ms", round1(ms(st.MinRTT)), "rttvar_ms", round1(ms(st.MeanDeviation)),
 			"sent_pkts", int64(st.PacketsSent), "lost_pkts", int64(st.PacketsLost),

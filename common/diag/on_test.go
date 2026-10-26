@@ -4,9 +4,15 @@ package diag
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"math/big"
 	"net"
 	"net/netip"
 	"strconv"
@@ -15,6 +21,9 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/metacubex/quic-go"
+	tls "github.com/metacubex/tls"
 )
 
 // The tests share one journal: a sink collects its lines.
@@ -113,6 +122,84 @@ func TestErrorClass(t *testing.T) {
 	if got := class(syscall.Errno(0)); got == "" {
 		t.Error("an unknown errno still has a class")
 	}
+}
+
+// T-142: every quic-go connection error unwraps to net.ErrClosed, so a QUIC connection the
+// server closed under live streams read as our own close and no tcp.reset was written.
+func TestQUICCloseClass(t *testing.T) {
+	cases := []struct {
+		err  error
+		want string
+		ours bool
+	}{
+		{&quic.TransportError{Remote: true, ErrorCode: 0x42, ErrorMessage: "Channel closed"}, "quic:remote", false},
+		{&quic.ApplicationError{Remote: true, ErrorCode: 0x100}, "quic:remote", false},
+		{&quic.ApplicationError{ErrorCode: 0}, "local", true},
+		{&quic.TransportError{ErrorCode: quic.ProtocolViolation}, "local", true},
+		{&quic.IdleTimeoutError{}, "timeout", false},
+	}
+	for _, c := range cases {
+		err := fmt.Errorf("read: %w", c.err)
+		if got := class(err); got != c.want || ours(got) != c.ours {
+			t.Errorf("%v: %s (ours %v), want %s (ours %v)", err, got, ours(got), c.want, c.ours)
+		}
+	}
+}
+
+// T-142: the server closed the QUIC connection under a download: a reset by the proxy.
+func TestRemoteQUICCloseIsAReset(t *testing.T) {
+	m := mark()
+	now := time.Now()
+	cut := fmt.Errorf("read: %w", &quic.TransportError{Remote: true, ErrorCode: 0x42, ErrorMessage: "Channel closed"})
+	e := end("tt", 4096, 500<<20, 10*time.Minute, RelayResult{DownErr: cut, DownRemote: true, DownAt: now, UpAt: now.Add(time.Millisecond), DownFirst: true})
+	e.State.firstDown.Store(e.Start.Add(time.Second).UnixNano())
+	e.State.lastDown.Store(now.UnixNano())
+	TCPClosed(e)
+	if got := collect(t, "tcp.reset", m); len(got) != 1 || got[0]["class"] != "quic:remote" {
+		t.Fatalf("%v", got)
+	}
+}
+
+// quic.close carries the peer's reason text, scrubbed.
+func TestQUICCloseReason(t *testing.T) {
+	ln, err := quic.ListenAddr("127.0.0.1:0", selfSigned(t), &quic.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go func() {
+		conn, err := ln.Accept(context.Background())
+		if err == nil {
+			_ = conn.CloseWithError(0x42, "Channel closed by 203.0.113.7")
+		}
+	}()
+	m := mark()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	conn, err := quic.DialAddr(ctx, ln.Addr().String(), &tls.Config{InsecureSkipVerify: true, NextProtos: []string{"t"}}, &quic.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	WatchQUIC("tt", conn, time.Now())
+	<-conn.Context().Done()
+	got := collect(t, "quic.close", m)
+	if len(got) != 1 || got[0]["code"] != "0x42" || got[0]["msg"] != "Channel closed by <ip>" || got[0]["remote"] != true {
+		t.Fatalf("%v", got)
+	}
+}
+
+func selfSigned(t *testing.T) *tls.Config {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := &x509.Certificate{SerialNumber: big.NewInt(1), NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour)}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &tls.Config{Certificates: []tls.Certificate{{Certificate: [][]byte{der}, PrivateKey: key}}, NextProtos: []string{"t"}}
 }
 
 func TestRateLimitCountsTheRest(t *testing.T) {

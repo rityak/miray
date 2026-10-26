@@ -14,6 +14,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/metacubex/quic-go"
 	"golang.org/x/net/publicsuffix"
 )
 
@@ -73,7 +74,7 @@ func scrub(s string) string {
 }
 
 // class names an error for grouping: timeout, refused, reset, unreachable, eof,
-// closed, tls:<alert>, canceled, or other.
+// closed, quic:remote, tls:<alert>, canceled, or other.
 func class(err error) string {
 	if err == nil {
 		return ""
@@ -93,6 +94,15 @@ func class(err error) string {
 		return "timeout"
 	case errors.Is(err, io.EOF), errors.Is(err, io.ErrUnexpectedEOF):
 		return "eof"
+	}
+	// quic-go connection errors unwrap to net.ErrClosed: the side that closed decides (T-142)
+	if remote, ok := quicClose(err); ok {
+		if remote {
+			return "quic:remote"
+		}
+		return "local"
+	}
+	switch {
 	case errors.Is(err, net.ErrClosed), errors.Is(err, io.ErrClosedPipe):
 		return "closed"
 	}
@@ -129,6 +139,24 @@ func class(err error) string {
 		return "eof"
 	}
 	return "other"
+}
+
+// quicClose reports whether err is a QUIC connection close and whether the peer sent it.
+func quicClose(err error) (remote, ok bool) {
+	var (
+		appErr       *quic.ApplicationError
+		transportErr *quic.TransportError
+		resetErr     *quic.StatelessResetError
+	)
+	switch {
+	case errors.As(err, &appErr):
+		return appErr.Remote, true
+	case errors.As(err, &transportErr):
+		return transportErr.Remote, true
+	case errors.As(err, &resetErr): // the server lost the connection's state
+		return true, true
+	}
+	return false, false
 }
 
 // ours is an error class this process caused: its own close or cancel, not the proxy.

@@ -55,6 +55,8 @@ type Client struct {
 	healthCheck      bool
 	healthCheckTimer *time.Timer
 	count            atomic.Int64
+	active           atomic.Bool // traffic since the last activity check (T-142)
+	checking         atomic.Bool // loopActivityCheck runs
 }
 
 func NewClient(ctx context.Context, options ClientOptions) (client *Client, err error) {
@@ -144,10 +146,62 @@ func (c *Client) resetHealthCheckTimer() {
 	c.healthCheckTimer.Reset(DefaultHealthCheckTimeout)
 }
 
+// activity marks traffic on the client's streams. The endpoint drops a tunnel that sends
+// no new request for client_listener_timeout (600 s by default), streams and all, however
+// much data they carry; the reference client sends _check while data flows, not more often
+// than its upstream timeout (T-142).
+func (c *Client) activity() {
+	if c.healthCheck || c.active.Load() {
+		return
+	}
+	c.active.Store(true)
+	if c.checking.CompareAndSwap(false, true) {
+		go c.loopActivityCheck()
+	}
+}
+
+func (c *Client) loopActivityCheck() {
+	ticker := time.NewTicker(activityCheckInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+		case <-c.ctx.Done():
+			c.checking.Store(false)
+			return
+		}
+		if !c.active.Swap(false) {
+			c.checking.Store(false)
+			// traffic between the Swap and the Store found the loop still running
+			if c.active.Load() && c.checking.CompareAndSwap(false, true) {
+				continue
+			}
+			return
+		}
+		ctx, cancel := context.WithTimeout(c.ctx, DefaultHealthCheckTimeout)
+		_ = c.HealthCheck(ctx)
+		cancel()
+	}
+}
+
+// activityBody reports the bytes of a stream to Client.activity.
+type activityBody struct {
+	io.ReadCloser
+	client *Client
+}
+
+func (b *activityBody) Read(p []byte) (int, error) {
+	n, err := b.ReadCloser.Read(p)
+	if n > 0 {
+		b.client.activity()
+	}
+	return n, err
+}
+
 func (c *Client) roundTrip(ctx context.Context, request *http.Request, conn *httpConn) error {
 	c.startOnce.Do(c.start)
 	pipeReader, pipeWriter := io.Pipe()
-	request.Body = pipeReader
+	request.Body = &activityBody{ReadCloser: pipeReader, client: c}
 	*conn = httpConn{
 		writer:      pipeWriter,
 		created:     make(chan struct{}),
@@ -192,7 +246,7 @@ func (c *Client) roundTrip(ctx context.Context, request *http.Request, conn *htt
 			conn.setup(nil, err)
 		} else {
 			c.resetHealthCheckTimer()
-			conn.setup(response.Body, nil)
+			conn.setup(&activityBody{ReadCloser: response.Body, client: c}, nil)
 		}
 	}()
 

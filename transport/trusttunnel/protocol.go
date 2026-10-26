@@ -31,7 +31,14 @@ const (
 	// config, which a custom QUIC config does not inherit: without it the connection
 	// closes by idle timeout with idle CONNECT streams open (RFC 9114 5.1).
 	DefaultQuicKeepAlivePeriod = 10 * time.Second
+	// DefaultActivityCheckInterval is how often _check goes while streams carry data: the
+	// reference client's upstream timeout (timeout_ms), far below the endpoint's
+	// client_listener_timeout of 600 s (T-142).
+	DefaultActivityCheckInterval = DefaultConnectionTimeout
 )
+
+// activityCheckInterval is a variable for tests.
+var activityCheckInterval = DefaultActivityCheckInterval
 
 // quicMaxIdleTimeout is a variable for tests.
 var quicMaxIdleTimeout = DefaultQuicMaxIdleTimeout
