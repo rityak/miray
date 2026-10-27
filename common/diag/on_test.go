@@ -188,6 +188,46 @@ func TestQUICCloseReason(t *testing.T) {
 	}
 }
 
+// The socket under a QUIC connection closed by this process (the old proxy of a reloaded
+// config) is not a close by the server: no quic.close.
+func TestQUICOwnSocketCloseIsNotRecorded(t *testing.T) {
+	ln, err := quic.ListenAddr("127.0.0.1:0", selfSigned(t), &quic.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go func() {
+		for {
+			if _, err := ln.Accept(context.Background()); err != nil {
+				return
+			}
+		}
+	}()
+	udp, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tr := &quic.Transport{Conn: udp}
+	m := mark()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	conn, err := tr.Dial(ctx, ln.Addr(), &tls.Config{InsecureSkipVerify: true, NextProtos: []string{"t"}}, &quic.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	WatchQUIC("warp", conn, time.Now())
+	_ = udp.Close()
+	select {
+	case <-conn.Context().Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("the connection outlived its socket")
+	}
+	t.Logf("cause: %v", context.Cause(conn.Context()))
+	if got := collect(t, "quic.close", m); len(got) != 0 {
+		t.Fatalf("%v", got)
+	}
+}
+
 func selfSigned(t *testing.T) *tls.Config {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)

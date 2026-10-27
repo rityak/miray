@@ -526,6 +526,10 @@ func WatchQUIC(node string, conn *quic.Conn, start time.Time) {
 			reason, remote = "stateless_reset", true
 		case cause == nil || errors.Is(cause, context.Canceled):
 			return
+		case errors.Is(cause, net.ErrClosed):
+			// the connection's own socket closed by this process (the old proxy of a reloaded
+			// config); the closes from the peer above unwrap to net.ErrClosed too, so this goes after them
+			return
 		default:
 			reason, code = "other", scrub(cause.Error())
 		}
