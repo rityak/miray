@@ -1,0 +1,201 @@
+# miray builds and releases (T-144, D-014 in the umiray docs).
+#   tag vX.Y.Z-miray.N -> release vX.Y.Z-miray.N (X.Y.Z = upstream mihomo release merged into the tagged commit)
+#   push to dev        -> rolling prerelease Prerelease-dev, version from git describe
+#   manual run         -> build artifacts only, nothing is published
+# The upstream workflows (build.yml, test.yml, trigger-cmfa-update.yml) stay in the tree for clean
+# upstream merges and are disabled in the rityak/miray repository settings.
+name: miray release
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - dev
+    tags:
+      - "v*-miray.*"
+    paths-ignore:
+      - "docs/**"
+      - "README.md"
+      - ".github/ISSUE_TEMPLATE/**"
+
+concurrency:
+  group: "${{ github.workflow }}-${{ github.ref }}"
+  cancel-in-progress: ${{ github.ref_type == 'branch' }}
+
+permissions:
+  contents: read
+
+env:
+  CGO_ENABLED: "0"
+  GOTOOLCHAIN: local
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      base: ${{ steps.v.outputs.base }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Fetch upstream release tags
+        # the base version comes from upstream tags; rityak/miray does not mirror them
+        run: git fetch --no-tags https://github.com/MetaCubeX/mihomo.git '+refs/tags/v1.*:refs/tags/v1.*'
+
+      - name: Compute version
+        id: v
+        run: |
+          set -euo pipefail
+          base=$(git describe --tags --abbrev=0 --match 'v[0-9]*' --exclude '*-*' --exclude '*_*' HEAD)
+          if [ "${GITHUB_REF_TYPE}" = tag ]; then
+            tag=${GITHUB_REF_NAME}
+            if [[ ! $tag =~ ^(v[0-9]+\.[0-9]+\.[0-9]+)-miray\.[1-9][0-9]*$ ]]; then
+              echo "::error::tag $tag does not match vX.Y.Z-miray.N"; exit 1
+            fi
+            if [ "${BASH_REMATCH[1]}" != "$base" ]; then
+              echo "::error::tag $tag names upstream ${BASH_REMATCH[1]}, the tagged commit is based on $base"; exit 1
+            fi
+            version=$tag
+          elif version=$(git describe --tags --abbrev=8 --match "$base-miray.*" HEAD 2>/dev/null); then
+            :
+          else
+            version="$base-miray.0-$(git rev-list --count "$base..HEAD")-g$(git rev-parse --short=8 HEAD)"
+          fi
+          echo "base=$base" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "### $version (upstream $base)" >> "$GITHUB_STEP_SUMMARY"
+
+  test:
+    runs-on: ubuntu-latest
+    env:
+      SKIP_CONCURRENT_TEST: "1"
+      SKIP_INTEROP_TEST: "1"
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.26"
+      - run: go vet ./...
+      - run: go test ./... -count=1
+      - run: go test ./... -tags with_gvisor -count=1
+      - run: go test ./common/diag/... -tags with_gvisor,miraydiag -count=1
+
+  build:
+    needs: version
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        jobs:
+          - { goos: windows, goarch: amd64, goamd64: v1, output: amd64-v1 }
+          - { goos: windows, goarch: amd64, goamd64: v3, output: amd64-v3 }
+          - { goos: windows, goarch: arm64, output: arm64 }
+          - { goos: linux, goarch: amd64, goamd64: v1, output: amd64-v1 }
+          - { goos: linux, goarch: amd64, goamd64: v3, output: amd64-v3 }
+          - { goos: linux, goarch: arm64, output: arm64 }
+          # diagnostics journal (T-138), same code plus common/diag
+          - { goos: windows, goarch: amd64, goamd64: v1, output: amd64-v1, diag: diag }
+          - { goos: linux, goarch: amd64, goamd64: v1, output: amd64-v1, diag: diag }
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.26"
+
+      - name: Build
+        env:
+          GOOS: ${{ matrix.jobs.goos }}
+          GOARCH: ${{ matrix.jobs.goarch }}
+          GOAMD64: ${{ matrix.jobs.goamd64 }}
+          VERSION: ${{ needs.version.outputs.version }}
+          DIAG: ${{ matrix.jobs.diag }}
+          OUTPUT: ${{ matrix.jobs.output }}
+        run: |
+          set -euo pipefail
+          tags=with_gvisor ver=$VERSION name="miray-$GOOS-$OUTPUT"
+          if [ -n "$DIAG" ]; then
+            tags=$tags,miraydiag ver=$ver-diag name=$name-diag
+          fi
+          exe=$name
+          [ "$GOOS" = windows ] && exe=$name.exe
+          mkdir -p dist
+          go build -tags "$tags" -trimpath -o "$exe" \
+            -ldflags "-X 'github.com/metacubex/mihomo/constant.Version=$ver' -X 'github.com/metacubex/mihomo/constant.BuildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ)' -w -s -buildid=" .
+          # a production build must not carry the bench handicap (T-041) or the diagnostics journal (T-138)
+          if [ -z "$DIAG" ] && grep -qE "BENCH HANDICAP BUILD|MIRAY DIAG BUILD" "$exe"; then
+            echo "::error::handicap or diagnostics code in a production build: $exe"; exit 1
+          fi
+          if [ "$GOOS" = windows ]; then
+            zip -9 "dist/$name-$VERSION.zip" "$exe"
+          else
+            gzip -9 -c "$exe" > "dist/$name-$VERSION.gz"
+          fi
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.jobs.goos }}-${{ matrix.jobs.output }}${{ matrix.jobs.diag && '-diag' || '' }}
+          path: dist/*
+
+  publish:
+    if: github.event_name == 'push'
+    needs: [version, test, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      VERSION: ${{ needs.version.outputs.version }}
+      BASE: ${{ needs.version.outputs.base }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist/
+          merge-multiple: true
+
+      - name: Checksums and version.txt
+        working-directory: dist
+        run: |
+          set -euo pipefail
+          sha256sum miray-* > sha256sums.txt
+          echo "$VERSION" > version.txt
+          cat sha256sums.txt
+
+      - name: Release notes
+        run: |
+          set -euo pipefail
+          {
+            if [ "${GITHUB_REF_TYPE}" = tag ] && [ "$(git cat-file -t "$GITHUB_REF_NAME")" = tag ]; then
+              git tag -l --format='%(contents:subject)%0a%0a%(contents:body)' "$GITHUB_REF_NAME"
+            elif [ "${GITHUB_REF_TYPE}" = branch ]; then
+              echo "Rolling build of \`${GITHUB_REF_NAME}\`, replaced on every push. Not a release."
+            fi
+            echo
+            echo "- Version: \`$VERSION\`"
+            echo "- Commit: ${GITHUB_SHA}"
+            echo "- Based on mihomo [$BASE](https://github.com/MetaCubeX/mihomo/releases/tag/$BASE)"
+            echo "- What miray changes: [README](https://github.com/${GITHUB_REPOSITORY}/blob/${GITHUB_SHA}/README.md)"
+            echo
+            echo "Files: \`miray-<os>-<arch>-<version>\` (\`amd64-v1\` runs on any x86-64 CPU, \`amd64-v3\` needs AVX2); \`-diag\` adds the diagnostics journal (\`MIRAY_DIAG=off\` disables it)."
+          } > notes.md
+          cat notes.md
+
+      - name: Publish release
+        if: github.ref_type == 'tag'
+        run: gh release create "$GITHUB_REF_NAME" dist/* --verify-tag --latest --title "$GITHUB_REF_NAME" --notes-file notes.md
+
+      - name: Publish rolling prerelease
+        if: github.ref_type == 'branch'
+        run: |
+          set -euo pipefail
+          tag="Prerelease-${GITHUB_REF_NAME}"
+          gh release delete "$tag" --cleanup-tag --yes || true
+          gh release create "$tag" dist/* --prerelease --latest=false --target "$GITHUB_SHA" \
+            --title "$tag $VERSION" --notes-file notes.md

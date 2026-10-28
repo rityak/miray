@@ -20,9 +20,15 @@ func TestMirayBuildRejectsUpstreamUpdate(t *testing.T) {
 	missing := filepath.Join(directory, "missing.exe")
 	previousVersion := C.Version
 	t.Cleanup(func() { C.Version = previousVersion })
-	C.Version = "miray-v1.19.32-dev"
 	const expected = "Miray builds require a Miray binary; the mihomo updater is disabled"
 	updater := &CoreUpdater{}
+	for _, version := range []string{"miray-test4-de9f93f3", "v1.19.33-miray.1", "v1.19.33-miray.1-5-gde9f93f3-diag"} {
+		C.Version = version
+		if err := updater.Update(missing, "", true); err == nil || err.Error() != expected {
+			t.Fatalf("Miray version %q: got %v, want %q", version, err, expected)
+		}
+	}
+	C.Version = "miray-v1.19.32-dev"
 	// Verify the guard before an existing target could reach any download.
 	if err := updater.Update(missing, "", true); err == nil || err.Error() != expected {
 		t.Fatalf("Miray missing target: got %v, want %q", err, expected)
