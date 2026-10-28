@@ -13,7 +13,7 @@ order: 1
 |---|---|---|
 | `miray` | Блок есть только в miray: опции по подсистемам | [miray](config/miray/index.md) |
 | `tun` | `mtu` на Linux по умолчанию 65535 (в mihomo 9000) с откатом на 9000; `gso` по умолчанию включён на Linux у стека `mips` | [TUN](config/inbound/tun.md) |
-| `proxy-groups`: `url-test`, `fallback`, `load-balance` | Соединение не ждёт таймаута узла: после задержки попытки (250 мс … 2 с) параллельно пробуется следующий узел группы (RFC 8305), отказавший узел откладывается до проверки здоровья, не дольше 30 с; проигрыш гонки — не отказ | ещё нет — [mihomo](https://wiki.metacubex.one/ru/config/proxy-groups/) |
+| `proxy-groups`: `url-test`, `fallback`, `load-balance` | Соединение не ждёт таймаута узла: после задержки попытки (250 мс … 2 с) параллельно пробуется следующий узел группы (RFC 8305), отказавший узел откладывается до проверки здоровья, не дольше 30 с; проигрыш гонки — не отказ | [общие поля](config/proxy-groups/index.md), [url-test](config/proxy-groups/url-test.md), [fallback](config/proxy-groups/fallback.md), [load-balance](config/proxy-groups/load-balance.md) |
 | `proxies`: `openvpn` | Без `auth` — SHA1, как в OpenVPN (в mihomo — SHA256) | ещё нет — [mihomo](https://wiki.metacubex.one/ru/config/proxies/) |
 | `proxies`: `trusttunnel` | Пока потоки передают данные, `_check` раз в 30 с без `health-check`; по QUIC — PING раз в 10 с | ещё нет — [mihomo](https://wiki.metacubex.one/ru/config/proxies/) |
 | `listeners`: `hysteria2`, `tuic` | На остановке и reload соединения закрываются с CONNECTION_CLOSE; на остановке закрываются все `listeners:`, не только TUN | ещё нет — [mihomo](https://wiki.metacubex.one/ru/config/inbound/listeners/) |
