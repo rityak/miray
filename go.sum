@@ -210,8 +210,8 @@ github.com/rityak/sing-shadowsocks v0.2.14-0.20261017012150-41461b750ad8 h1:m6vO
 github.com/rityak/sing-shadowsocks v0.2.14-0.20261017012150-41461b750ad8/go.mod h1:2e5EIaw0rxKrm1YTRmiMnDulwbGxH9hAFlrwQLQMQkU=
 github.com/rityak/sing-shadowsocks2 v0.2.9-0.20261017012153-da4a7a72dbf5 h1:W7/6EVz50gPVboBG2+couZeU/BIpsywG9Bkh1JNK+Go=
 github.com/rityak/sing-shadowsocks2 v0.2.9-0.20261017012153-da4a7a72dbf5/go.mod h1:vOEbfKC60txi0ca+yUlqEwOGc3Obl6cnSgx9Gf45KjE=
-github.com/rityak/sing-tun v0.4.28-0.20261022093054-d573c945e09a h1:BaEFCvFLTFOzhnhW8j/x/Ls0gF4dk8DVPOZyV3HHbac=
-github.com/rityak/sing-tun v0.4.28-0.20261022093054-d573c945e09a/go.mod h1:t2cK1AjogLda3/XxesmG0l7r1HzagLaUPBdNovhsb4Q=
+github.com/rityak/sing-tun v0.4.28-0.20261028155257-7a39f969ea28 h1:r6ICbqN6sCGGz9D1+4cezujv4M7Rp8vQJIjph5kxF3Y=
+github.com/rityak/sing-tun v0.4.28-0.20261028155257-7a39f969ea28/go.mod h1:t2cK1AjogLda3/XxesmG0l7r1HzagLaUPBdNovhsb4Q=
 github.com/rityak/smux v0.0.0-20261015095034-a1787fab6ce4 h1:+fQVi8PW90SR1D5uu0SvLiUg1z6t8aFXaayy5ZrjorM=
 github.com/rityak/smux v0.0.0-20261015095034-a1787fab6ce4/go.mod h1:/yI4OiGOSn0SURhZdJF3CbtPg3nwK700bG8TZLMBvAg=
 github.com/rityak/utls v0.0.0-20261015104218-792958f984ea h1:Wyhsn08Qh9M5eZM8i7fnsqrBh/U1nydyFMkmdFHtEu8=

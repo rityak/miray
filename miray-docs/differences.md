@@ -12,7 +12,8 @@ order: 1
 | Блок | Что иначе в miray | Страница |
 |---|---|---|
 | `miray` | Блок есть только в miray: опции по подсистемам | [miray](config/miray/index.md) |
-| `tun` | `mtu` на Linux по умолчанию 65535 (в mihomo 9000) с откатом на 9000; `gso` по умолчанию включён на Linux у стека `mips` | [TUN](config/inbound/tun.md) |
+| `tun` | `mtu` на Linux по умолчанию 65535 (в mihomo 9000) с откатом на 9000; `gso` по умолчанию включён на Linux у стека `mips`; отказ дозвона и `REJECT` — RST на SYN (`mips`, `gvisor`) или сброс соединения, а не пустой ответ | [TUN](config/inbound/tun.md) |
+| `rules`: `REJECT` | TCP-соединение закрывается сбросом (RST), а не штатно: приложение видит отказ, а не пустой ответ; через TUN `mips`/`gvisor` — отказ на SYN | — |
 | `proxy-groups`: `url-test`, `fallback`, `load-balance` | Соединение не ждёт таймаута узла: после задержки попытки (250 мс … 2 с) параллельно пробуется следующий узел группы (RFC 8305), отказавший узел откладывается до проверки здоровья, не дольше 30 с; проигрыш гонки — не отказ | [общие поля](config/proxy-groups/index.md), [url-test](config/proxy-groups/url-test.md), [fallback](config/proxy-groups/fallback.md), [load-balance](config/proxy-groups/load-balance.md) |
 | `proxy-groups`: `url-test`, `tolerance` | Допуск — большее из `tolerance` и 10% задержки самого быстрого узла (`miray.proxy-groups.relative-tolerance`); держит и первый в списке узел | [url-test](config/proxy-groups/url-test.md#tolerance), [miray.proxy-groups](config/miray/proxy-groups.md) |
 | `proxies`: `openvpn` | Без `auth` — SHA1, как в OpenVPN (в mihomo — SHA256) | [openvpn](config/proxies/openvpn.md) |

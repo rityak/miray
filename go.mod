@@ -152,7 +152,7 @@ replace google.golang.org/protobuf => github.com/metacubex/protobuf-go v0.0.0-20
 
 replace github.com/metacubex/mipstack => github.com/rityak/mipstack v0.0.0-20261024080511-2e07f8141286
 
-replace github.com/metacubex/sing-tun => github.com/rityak/sing-tun v0.4.28-0.20261022093054-d573c945e09a
+replace github.com/metacubex/sing-tun => github.com/rityak/sing-tun v0.4.28-0.20261028155257-7a39f969ea28
 
 replace github.com/metacubex/restls-client-go => github.com/rityak/restls-client-go v0.0.0-20261015085035-a573679ec5c6
 

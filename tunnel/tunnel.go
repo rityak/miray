@@ -34,6 +34,7 @@ import (
 	"github.com/metacubex/mihomo/log"
 	"github.com/metacubex/mihomo/tunnel/statistic"
 
+	"github.com/metacubex/sing/common"
 	"github.com/metacubex/sing/common/network"
 	"golang.org/x/exp/slices"
 )
@@ -815,7 +816,9 @@ func handleTCPConn(connCtx C.ConnContext) {
 
 	peekMutex := sync.Mutex{}
 	dstKey := metadata.RemoteAddress()
-	if !conn.Peeked() && !serverFirst.Exist(dstKey) {
+	// A lazy TUN connection (T-153) has not answered the app's SYN yet: no data can
+	// come before the dial, and a read from another goroutine would answer it.
+	if !conn.Peeked() && !serverFirst.Exist(dstKey) && !needHandshakeForRead(conn) {
 		peekMutex.Lock()
 		go func() {
 			defer peekMutex.Unlock()
@@ -899,8 +902,13 @@ func handleTCPConn(connCtx C.ConnContext) {
 		if diag.Enabled {
 			diag.DialFailed(trace, diagDial(metadata, rule, proxy), err)
 		}
-		// inbounds with a deferred response (hysteria2) send the failure to the client (T-102)
-		_ = network.ReportHandshakeFailure(conn, err)
+		reportDialFailure(conn, err)
+		return
+	}
+	if remoteConn.Chains().Last() == "REJECT" { // a refusal, as a failed dial (T-153)
+		logMetadata(metadata, rule, remoteConn)
+		_ = remoteConn.Close()
+		reportDialFailure(conn, errRejected)
 		return
 	}
 	// ... and the success now, as sing-box does after the dial: the official hysteria
@@ -929,6 +937,30 @@ func handleTCPConn(connCtx C.ConnContext) {
 		return
 	}
 	handleSocket(conn, remoteConn)
+}
+
+var errRejected = errors.New("rejected by rule")
+
+// needHandshakeForRead reports an inbound connection that has not completed its
+// handshake with the client yet (a lazy TUN connection, T-153).
+func needHandshakeForRead(conn net.Conn) bool {
+	c, ok := common.Cast[interface{ NeedHandshakeForRead() bool }](conn)
+	return ok && c.NeedHandshakeForRead()
+}
+
+// reportDialFailure tells the client the dial failed. Inbounds with a deferred
+// response send it themselves: hysteria2 its error (T-102), a lazy TUN connection a
+// reset of the SYN (T-153). Any other connection is reset on close instead of
+// closed cleanly (RFC 9293 §3.10.7.1, RFC 1122 §4.2.2.13; sing-box does the same),
+// so the app sees a refused connection rather than an empty reply.
+func reportDialFailure(conn net.Conn, err error) {
+	if _, ok := common.Cast[network.HandshakeFailure](conn); ok {
+		_ = network.ReportHandshakeFailure(conn, err)
+		return
+	}
+	if l, ok := common.Cast[interface{ SetLinger(sec int) error }](conn); ok {
+		_ = l.SetLinger(0)
+	}
 }
 
 func logMetadataErr(metadata *C.Metadata, rule C.Rule, proxy C.ProxyAdapter, err error) {
