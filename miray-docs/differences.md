@@ -17,7 +17,7 @@ order: 1
 | `proxies`: `openvpn` | Без `auth` — SHA1, как в OpenVPN (в mihomo — SHA256) | [openvpn](config/proxies/openvpn.md) |
 | `proxies`: `trusttunnel` | Пока потоки передают данные, `_check` раз в 30 с без `health-check`; по QUIC — PING раз в 10 с | [trusttunnel](config/proxies/trusttunnel.md) |
 | `listeners`: `hysteria2`, `tuic` | На остановке и reload соединения закрываются с CONNECTION_CLOSE; на остановке закрываются все `listeners:`, не только TUN | [listeners](config/inbound/listeners/index.md), [hysteria2](config/inbound/listeners/hysteria2.md), [tuic](config/inbound/listeners/tuic.md) |
-| `tls.custom-certifactes` | Действуют и для прокси, которые собирают TLS при создании (hysteria2, tuic, HTTPS, TLS-SOCKS5) | ещё нет; в вики mihomo блок `tls` не описан |
+| `tls.custom-certifactes` | Действуют и для прокси, которые собирают TLS при создании (hysteria2, tuic, HTTPS, TLS-SOCKS5) | [TLS](config/tls.md) (в вики mihomo блок не описан) |
 | DNS: адрес `0.0.0.0`/`::` в ответе | Блокировка: отказ сразу, без повторов и без сокета | [miray.dns](config/miray/dns.md) |
 | Reload (`PUT /configs`) | providers грузятся, пока работает старый конфиг; кеш DNS переживает reload без изменений `dns:`; открытые UDP-сессии не рвутся | ещё нет — [mihomo](https://wiki.metacubex.one/ru/api/) |
 
