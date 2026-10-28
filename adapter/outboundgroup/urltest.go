@@ -132,7 +132,9 @@ func (u *URLTest) fast(touch bool) C.Proxy {
 
 		fast := proxies[0]
 		minDelay := fast.LastDelayForTestUrl(u.testUrl)
-		fastNotExist := true
+		// the first node counts too: otherwise, with the current node first in the
+		// list, tolerance never held it (T-149)
+		fastNotExist := u.fastNode == nil || fast.Name() != u.fastNode.Name()
 
 		for _, proxy := range proxies[1:] {
 			if u.fastNode != nil && proxy.Name() == u.fastNode.Name() {
@@ -150,8 +152,8 @@ func (u *URLTest) fast(touch bool) C.Proxy {
 			}
 
 		}
-		// tolerance
-		if u.fastNode == nil || fastNotExist || !u.fastNode.AliveForTestUrl(u.testUrl) || u.fastNode.LastDelayForTestUrl(u.testUrl) > fast.LastDelayForTestUrl(u.testUrl)+u.tolerance {
+		// tolerance, absolute or relative to the fastest delay (T-149)
+		if u.fastNode == nil || fastNotExist || !u.fastNode.AliveForTestUrl(u.testUrl) || slowerThanTolerated(u.fastNode.LastDelayForTestUrl(u.testUrl), fast.LastDelayForTestUrl(u.testUrl), u.tolerance) {
 			u.fastNode = fast
 		}
 		return u.fastNode, nil

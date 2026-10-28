@@ -217,7 +217,10 @@ func GetGeneral() *config.General {
 		KeepAliveInterval: int(keepalive.KeepAliveInterval() / time.Second),
 		KeepAliveIdle:     int(keepalive.KeepAliveIdle() / time.Second),
 		DisableKeepAlive:  keepalive.DisableKeepAlive(),
-		Miray:             config.Miray{DNS: config.MirayDNS{UnspecifiedAsBlock: dialer.GetUnspecifiedAsBlock()}},
+		Miray: config.Miray{
+			DNS:         config.MirayDNS{UnspecifiedAsBlock: dialer.GetUnspecifiedAsBlock()},
+			ProxyGroups: config.MirayProxyGroups{RelativeTolerance: outboundgroup.GetRelativeTolerance()},
+		},
 	}
 
 	return general
@@ -479,6 +482,7 @@ func updateGeneral(general *config.General, logging bool) {
 
 	dialer.SetTcpConcurrent(general.TCPConcurrent)
 	dialer.SetUnspecifiedAsBlock(general.Miray.DNS.UnspecifiedAsBlock)
+	outboundgroup.SetRelativeTolerance(general.Miray.ProxyGroups.RelativeTolerance)
 	if logging && general.TCPConcurrent {
 		log.Infoln("Use tcp concurrent")
 	}
