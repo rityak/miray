@@ -57,6 +57,9 @@ func (d *Direct) ResolveUDP(ctx context.Context, metadata *C.Metadata) error {
 		}
 		metadata.DstIP = ip
 	}
+	if dialer.IsBlockedDestination(metadata.DstIP) { // T-146: not sent to the local host
+		return dialer.ErrUnspecifiedDestination
+	}
 	return nil
 }
 

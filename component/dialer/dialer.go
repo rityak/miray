@@ -61,6 +61,9 @@ func DialContext(ctx context.Context, network, address string, options ...Option
 		}
 		return nil, err
 	}
+	if ips, err = dropUnspecified(ips); err != nil {
+		return nil, err
+	}
 	// shortcut: custom dialers retain their context; audit stream lifetimes before canceling their pending dials.
 	switch opt.netDialer.(type) {
 	case nil, *net.Dialer:

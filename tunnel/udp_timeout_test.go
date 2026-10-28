@@ -1,6 +1,9 @@
 package tunnel
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"net"
 	"net/netip"
 	"testing"
@@ -8,6 +11,7 @@ import (
 
 	"github.com/metacubex/mihomo/common/net/deadline"
 	"github.com/metacubex/mihomo/common/net/packet"
+	"github.com/metacubex/mihomo/component/dialer"
 	C "github.com/metacubex/mihomo/constant"
 )
 
@@ -74,5 +78,17 @@ func TestUDPIdleTimeoutLazyDeadline(t *testing.T) {
 				t.Fatal("session not closed after becoming idle")
 			}
 		})
+	}
+}
+
+// A DNS-blocked destination fails its dial once: retry stops on it (T-146).
+func TestRetryStopsOnUnspecifiedDestination(t *testing.T) {
+	calls := 0
+	_, err := retry(context.Background(), func(context.Context) (int, error) {
+		calls++
+		return 0, fmt.Errorf("dial: %w", dialer.ErrUnspecifiedDestination)
+	}, nil)
+	if !errors.Is(err, dialer.ErrUnspecifiedDestination) || calls != 1 {
+		t.Fatalf("%d attempts, %v; want 1 and ErrUnspecifiedDestination", calls, err)
 	}
 }

@@ -217,6 +217,7 @@ func GetGeneral() *config.General {
 		KeepAliveInterval: int(keepalive.KeepAliveInterval() / time.Second),
 		KeepAliveIdle:     int(keepalive.KeepAliveIdle() / time.Second),
 		DisableKeepAlive:  keepalive.DisableKeepAlive(),
+		Miray:             config.Miray{DNS: config.MirayDNS{UnspecifiedAsBlock: dialer.GetUnspecifiedAsBlock()}},
 	}
 
 	return general
@@ -477,6 +478,7 @@ func updateGeneral(general *config.General, logging bool) {
 	resolver.DisableIPv6 = !general.IPv6
 
 	dialer.SetTcpConcurrent(general.TCPConcurrent)
+	dialer.SetUnspecifiedAsBlock(general.Miray.DNS.UnspecifiedAsBlock)
 	if logging && general.TCPConcurrent {
 		log.Infoln("Use tcp concurrent")
 	}

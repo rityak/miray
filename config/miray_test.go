@@ -1,0 +1,29 @@
+package config
+
+import "testing"
+
+// miray.dns.unspecified-as-block is on unless the config turns it off (T-146, D-015).
+func TestMirayUnspecifiedAsBlock(t *testing.T) {
+	for _, c := range []struct {
+		yaml string
+		want bool
+	}{
+		{"mode: rule\n", true},
+		{"miray: {}\n", true},
+		{"miray: {dns: {}}\n", true},
+		{"miray: {dns: {unspecified-as-block: false}}\n", false},
+		{"miray:\n  dns:\n    unspecified-as-block: true\n", true},
+	} {
+		raw, err := UnmarshalRawConfig([]byte(c.yaml))
+		if err != nil {
+			t.Fatalf("%q: %v", c.yaml, err)
+		}
+		general, err := parseGeneral(raw)
+		if err != nil {
+			t.Fatalf("%q: %v", c.yaml, err)
+		}
+		if got := general.Miray.DNS.UnspecifiedAsBlock; got != c.want {
+			t.Errorf("%q: unspecified-as-block %v, want %v", c.yaml, got, c.want)
+		}
+	}
+}

@@ -70,6 +70,7 @@ type General struct {
 	KeepAliveIdle     int                     `json:"keep-alive-idle"`
 	KeepAliveInterval int                     `json:"keep-alive-interval"`
 	DisableKeepAlive  bool                    `json:"disable-keep-alive"`
+	Miray             Miray                   `json:"miray"`
 }
 
 // Inbound config
@@ -475,6 +476,7 @@ type RawConfig struct {
 	TLS           RawTLS                    `yaml:"tls" json:"tls"`
 
 	ClashForAndroid RawClashForAndroid `yaml:"clash-for-android" json:"clash-for-android"`
+	Miray           RawMiray           `yaml:"miray" json:"miray"`
 }
 
 // Parse config
@@ -509,6 +511,7 @@ func DefaultRawConfig() *RawConfig {
 		FindProcessMode:   process.FindProcessStrict,
 		GlobalUA:          "clash.meta/" + C.Version,
 		ETagSupport:       true,
+		Miray:             defaultRawMiray(),
 		DNS: RawDNS{
 			Enable:         false,
 			IPv6:           false,
@@ -813,6 +816,7 @@ func parseGeneral(cfg *RawConfig) (*General, error) {
 		KeepAliveIdle:     cfg.KeepAliveIdle,
 		KeepAliveInterval: cfg.KeepAliveInterval,
 		DisableKeepAlive:  cfg.DisableKeepAlive,
+		Miray:             parseMiray(cfg),
 	}, nil
 }
 

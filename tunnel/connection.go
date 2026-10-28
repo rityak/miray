@@ -12,6 +12,7 @@ import (
 	"github.com/metacubex/mihomo/common/diag"
 	"github.com/metacubex/mihomo/common/handicap"
 	N "github.com/metacubex/mihomo/common/net"
+	"github.com/metacubex/mihomo/component/dialer"
 	C "github.com/metacubex/mihomo/constant"
 	"github.com/metacubex/mihomo/log"
 )
@@ -209,6 +210,10 @@ func (s *packetSender) forward(pc C.PacketConn, metadata *C.Metadata, data []byt
 
 		if !metadata.DstIP.IsValid() {
 			log.Warnln("[UDP] Destination ip not valid: %#v", metadata)
+			return
+		}
+		if dialer.IsBlockedDestination(metadata.DstIP) { // T-146: a DNS block; not sent to the local host
+			log.Debugln("[UDP] %s: %s", originMetadata.RemoteAddress(), dialer.ErrUnspecifiedDestination)
 			return
 		}
 		s.AddMapping(originMetadata, metadata)
