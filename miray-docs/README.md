@@ -27,6 +27,7 @@ miray-docs/
     miray/              блок miray: (только miray)
     inbound/tun.md      пути — как у вики mihomo (config/inbound/tun → config/inbound/tun.md)
     …
+  api/index.md          REST API и reload (api → api/index.md)
 ```
 
 ## Front matter

@@ -16,5 +16,6 @@ miray — форк ядра [mihomo](https://github.com/MetaCubeX/mihomo) (Clash
 - [Прокси](config/proxies/index.md): openvpn, trusttunnel
 - [TLS](config/tls.md): свои доверенные сертификаты, сертификат контроллера
 - [Группы прокси](config/proxy-groups/index.md): url-test, fallback, load-balance
+- [API](api/index.md): reload без простоя, блок `miray` в `GET /configs`
 
 Что изменено в ядре без изменений в конфиге (скорость, исправления протоколов) — в [README ядра](../README.md).
