@@ -81,7 +81,8 @@ func (u *CoreUpdater) CoreBaseName() string {
 }
 
 func (u *CoreUpdater) Update(currentExePath string, channel string, force bool) (err error) {
-	if strings.HasPrefix(C.Version, "miray-") {
+	// miray-testN-<commit> (test builds), vX.Y.Z-miray.N[-K-g<commit>][-diag] (releases, D-014)
+	if strings.Contains(C.Version, "miray") {
 		return fmt.Errorf("Miray builds require a Miray binary; the mihomo updater is disabled")
 	}
 	u.mu.Lock()
