@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/netip"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -227,6 +228,7 @@ type testCorker struct {
 	udp     *net.UDPConn
 	corked  bool
 	queue   [][]byte
+	mu      sync.Mutex // batches is read by the test while the sender runs
 	batches []int
 }
 
@@ -240,7 +242,9 @@ func (c *testCorker) WriteTo(b []byte, _ net.Addr) (int, error) {
 func (c *testCorker) Cork() { c.corked, c.queue = true, c.queue[:0] }
 func (c *testCorker) Uncork() [][]byte {
 	c.corked = false
+	c.mu.Lock()
 	c.batches = append(c.batches, len(c.queue))
+	c.mu.Unlock()
 	return c.queue
 }
 func (c *testCorker) RawUDP() *net.UDPConn { return c.udp }
@@ -302,6 +306,8 @@ func TestCorkedBatchUnderCipher(t *testing.T) {
 			t.Fatalf("datagram %d: %v %v", i, buf[:n], err)
 		}
 	}
+	corker.mu.Lock()
+	defer corker.mu.Unlock()
 	if len(corker.batches) == 0 || corker.batches[0] < 2 {
 		t.Fatalf("batches %v, want the queued datagrams together", corker.batches)
 	}

@@ -291,6 +291,27 @@ type UDPFastTunnel interface {
 	HandleUDPPacketFast(source netip.AddrPort, packet UDPFastPacket) bool
 }
 
+// UDPFlow is the fast path of one packet connection of a listener (T-133): its
+// datagrams share one SNAT key, so once the session is established they go
+// straight to it, like the datagrams of a TUN flow.
+type UDPFlow interface {
+	// Send hands a datagram to the established session. It returns false when
+	// there is none yet or earlier datagrams of the flow are still queued on the
+	// regular path; the caller then takes HandleUDPPacket with a UDPFlowPacket.
+	Send(packet UDPFastPacket) bool
+}
+
+// UDPFlowTunnel is implemented by a tunnel that keeps UDPFlows.
+type UDPFlowTunnel interface {
+	NewUDPFlow() UDPFlow
+}
+
+// UDPFlowPacket is a regular-path datagram of a UDPFlow; the session it reaches
+// takes over the flow.
+type UDPFlowPacket interface {
+	UDPFlow() UDPFlow
+}
+
 type UDPPacketInAddr interface {
 	InAddr() net.Addr
 }
@@ -324,6 +345,14 @@ func (s *packetAdapter) Key() string {
 func (s *packetAdapter) WriteBackSource() any {
 	if w, ok := s.UDPPacket.(interface{ WriteBackSource() any }); ok {
 		return w.WriteBackSource()
+	}
+	return nil
+}
+
+// UDPFlow passes on the flow of the packet's connection, if any (T-133).
+func (s *packetAdapter) UDPFlow() UDPFlow {
+	if f, ok := s.UDPPacket.(UDPFlowPacket); ok {
+		return f.UDPFlow()
 	}
 	return nil
 }

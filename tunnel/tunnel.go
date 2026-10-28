@@ -117,6 +117,10 @@ func (t tunnel) HandleUDPPacket(packet C.UDPPacket, metadata *C.Metadata) {
 	if metadata.Type == C.TUN {
 		src := netip.AddrPortFrom(metadata.SrcIP.Unmap(), metadata.SrcPort)
 		flow, _ = udpFlows.LoadOrStoreFn(src, func() *flowState { return &flowState{src: src} })
+	} else if fp, ok := packet.(C.UDPFlowPacket); ok {
+		flow, _ = fp.UDPFlow().(*flowState)
+	}
+	if flow != nil {
 		flow.queued.Add(1)
 		packetAdapter = &flowPacket{PacketAdapter: packetAdapter, flow: flow}
 	}
@@ -137,9 +141,11 @@ func (t tunnel) HandleUDPPacket(packet C.UDPPacket, metadata *C.Metadata) {
 // udpFlows holds fast-path state of TUN flows, keyed by flow source (T-008).
 var udpFlows xsync.Map[netip.AddrPort, *flowState]
 
-// flowState is the fast-path record of one TUN flow.
+// flowState is the fast-path record of one TUN flow or, with conn set, of one
+// packet connection of a listener (T-133), which owns it instead of udpFlows.
 type flowState struct {
-	src netip.AddrPort
+	src  netip.AddrPort
+	conn bool
 	// queued counts this flow's datagrams between HandleUDPPacket and
 	// sender.Send (the worker queue). The fast path is taken only at zero, so a
 	// fast datagram never overtakes an earlier regular one.
@@ -169,6 +175,9 @@ func (f *flowState) dequeued(key string) {
 // forget removes the flow from udpFlows unless a newer state replaced it or it
 // is in use again.
 func (f *flowState) forget() {
+	if f.conn {
+		return // the listener's connection holds it
+	}
 	udpFlows.Compute(f.src, func(old *flowState, loaded bool) (*flowState, xsync.ComputeOp) {
 		if loaded && old == f && f.queued.Load() == 0 && f.sender.Load() == nil {
 			return nil, xsync.DeleteOp
@@ -187,8 +196,19 @@ func (t tunnel) HandleUDPPacketFast(source netip.AddrPort, packet C.UDPFastPacke
 	if !ok {
 		return false
 	}
-	sender := flow.sender.Load()
-	if sender == nil || flow.queued.Load() != 0 {
+	return flow.Send(packet)
+}
+
+var _ C.UDPFlowTunnel = Tunnel
+
+// NewUDPFlow starts the fast path of a listener's packet connection (T-133).
+func (t tunnel) NewUDPFlow() C.UDPFlow { return &flowState{conn: true} }
+
+// Send takes a datagram of the flow's established session to it, ignoring the
+// tunnel status like HandleUDPPacketFast (D-003).
+func (f *flowState) Send(packet C.UDPFastPacket) bool {
+	sender := f.sender.Load()
+	if sender == nil || f.queued.Load() != 0 {
 		return false
 	}
 	sender.send(packet) // nonblocking
@@ -720,6 +740,14 @@ func handleUDPConn(packet C.PacketAdapter) {
 					flow.sender.Store(nil)
 					flow.forget()
 				}()
+			} else if ok {
+				if fp, isFlow := packet.(C.UDPFlowPacket); isFlow {
+					if flow, _ := fp.UDPFlow().(*flowState); flow != nil {
+						flow.sender.Store(ps)
+						// A session the flow took up after this one ended keeps it.
+						defer flow.sender.CompareAndSwap(ps, nil)
+					}
+				}
 			}
 			sender.Process(pc, proxy)
 		}()

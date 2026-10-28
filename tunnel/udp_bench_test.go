@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	N "github.com/metacubex/mihomo/common/net"
 	"github.com/metacubex/mihomo/component/nat"
 	C "github.com/metacubex/mihomo/constant"
 )
@@ -145,3 +146,50 @@ func BenchmarkUDPFastEstablished(b *testing.B) {
 		<-done
 	}
 }
+
+// T-133: a datagram of an established listener packet connection (ss server and
+// the other sing inbounds): the regular path (Metadata, worker queue, NAT lookup)
+// against the connection's flow. The packet objects are reused.
+func benchConnSession(b *testing.B, viaFlow bool) {
+	OnRunning()
+	udpInit.Do(initUDP)
+	udp, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer udp.Close()
+
+	pc := &udpActivityConn{PacketConn: &benchPC{udp: udp, done: make(chan struct{}, 1)}}
+	done := pc.PacketConn.(*benchPC).done
+	key := "t133-bench"
+	rAddr := N.NewCustomAddr(C.SHADOWSOCKS.String(), key, &net.UDPAddr{IP: net.IPv4(203, 0, 113, 7), Port: 40000})
+	flow := Tunnel.NewUDPFlow().(*flowState)
+	regular := &benchPacket{make([]byte, 1200), rAddr} // a datagram before T-133: no flow
+	fast := &benchFastPacket{regular.data, netip.MustParseAddrPort("1.1.1.1:443")}
+	md := func() *C.Metadata {
+		m := benchMetadata()
+		m.Type = C.SHADOWSOCKS
+		return m
+	}
+
+	sender := newPacketSender().(*packetSender)
+	natTable.GetOrCreate(key, func() C.PacketSender { return sender })
+	defer func() { sender.Close(); natTable.Delete(key) }()
+	sender.AddMapping(md(), md())
+	flow.sender.Store(sender)
+	go sender.Process(pc, nat.NewWriteBackProxy(C.NewPacketAdapter(regular, md())))
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if viaFlow {
+			flow.Send(fast)
+		} else {
+			Tunnel.HandleUDPPacket(regular, md())
+		}
+		<-done
+	}
+}
+
+func BenchmarkUDPConnRegular(b *testing.B) { benchConnSession(b, false) }
+func BenchmarkUDPConnFlow(b *testing.B)    { benchConnSession(b, true) }

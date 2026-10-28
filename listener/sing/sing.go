@@ -187,6 +187,13 @@ func (h *ListenerHandler) NewPacketConnection(ctx context.Context, conn network.
 		lastRawDst net.Addr // of lastDst: a flow keeps its destination
 		haveLast   bool
 	)
+	// Once the session is established, a datagram to an IP goes straight to it,
+	// without Metadata or the worker queue, as on a TUN flow (T-133): the session
+	// was routed once, by its first datagram.
+	var flow C.UDPFlow
+	if ft, ok := h.Tunnel.(C.UDPFlowTunnel); ok {
+		flow = ft.NewUDPFlow()
+	}
 	rwOptions := network.ReadWaitOptions{}
 	readWaiter, isReadWaiter := bufio.CreatePacketReadWaiter(conn)
 	if isReadWaiter {
@@ -214,6 +221,16 @@ func (h *ListenerHandler) NewPacketConnection(ctx context.Context, conn network.
 			}
 			return err
 		}
+		if flow != nil && dest.IsIP() && dest.Port != 0 {
+			dst := dest.AddrPort()
+			fp := fastPacketPool.Get().(*fastPacket)
+			fp.buff, fp.dst = buff, netip.AddrPortFrom(dst.Addr().Unmap(), dst.Port())
+			if flow.Send(fp) {
+				continue
+			}
+			fp.buff = nil // not taken: the buffer continues on the regular path
+			fastPacketPool.Put(fp)
+		}
 		cPacket := &packet{
 			writer: &writer,
 			mutex:  &mutex,
@@ -221,6 +238,7 @@ func (h *ListenerHandler) NewPacketConnection(ctx context.Context, conn network.
 			lAddr:  lAddr,
 			buff:   buff,
 			reply:  reply,
+			flow:   flow,
 		}
 		if !haveLast || dest != lastDst {
 			lastDst, lastRawDst, haveLast = dest, rawUDPAddr(dest), true
@@ -356,7 +374,11 @@ type packet struct {
 	lAddr  net.Addr
 	buff   *buf.Buffer
 	reply  *ReplyConn // nil unless the listener batches replies (T-068)
+	flow   C.UDPFlow  // fast path of the packet's connection, nil for NewPacket (T-133)
 }
+
+// UDPFlow is the fast path the session of this packet takes over.
+func (c *packet) UDPFlow() C.UDPFlow { return c.flow }
 
 // ReplyConn returns the listener socket the replies of this packet go out on, if it batches.
 func (c *packet) ReplyConn() any {

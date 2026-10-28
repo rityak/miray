@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	N "github.com/metacubex/mihomo/common/net"
 	"github.com/metacubex/mihomo/common/net/packet"
 	"github.com/metacubex/mihomo/component/resolver"
 	"github.com/metacubex/mihomo/component/sniffer"
@@ -234,6 +235,106 @@ func TestUDPFlowLifecycle(t *testing.T) {
 	failed := netip.MustParseAddrPort("198.18.0.1:40004")
 	ingress(failed, 4)
 	eventually(t, "flow not forgotten after a failed dial", gone(failed))
+}
+
+// connPacket is a regular-path datagram of a listener's packet connection.
+type connPacket struct {
+	benchPacket
+	flow C.UDPFlow
+}
+
+func (p *connPacket) UDPFlow() C.UDPFlow { return p.flow }
+
+// The flow of a packet connection (T-133): refused before its session exists and
+// while its regular datagrams are queued, taken by the session the first datagram
+// creates, released when that session expires, taken again by the next one.
+func TestUDPConnFlowLifecycle(t *testing.T) {
+	sink, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sink.Close()
+
+	proxy := &lifecycleProxy{}
+	oldProxies, oldMode, oldTimeout := proxies, mode.Load(), udpTimeout
+	proxies, udpTimeout = map[string]C.Proxy{"DIRECT": proxy}, 300*time.Millisecond
+	mode.Store(Direct)
+	defer func() { proxies, udpTimeout = oldProxies, oldTimeout; mode.Store(oldMode) }()
+	OnRunning()
+
+	dst := sink.LocalAddr().(*net.UDPAddr).AddrPort()
+	src := netip.MustParseAddrPort("203.0.113.7:40000")
+	recv := func(want byte) {
+		t.Helper()
+		b := make([]byte, 16)
+		_ = sink.SetReadDeadline(time.Now().Add(2 * time.Second))
+		n, _, err := sink.ReadFrom(b)
+		if err != nil || n != 1 || b[0] != want {
+			t.Fatalf("sink got %v %v, want payload %d", b[:n], err, want)
+		}
+	}
+	newConn := func(id string) (C.UDPFlow, func(byte)) {
+		flow := Tunnel.NewUDPFlow()
+		rAddr := N.NewCustomAddr(C.SHADOWSOCKS.String(), id, net.UDPAddrFromAddrPort(src))
+		return flow, func(payload byte) {
+			Tunnel.HandleUDPPacket(&connPacket{benchPacket{[]byte{payload}, rAddr}, flow}, &C.Metadata{
+				NetWork: C.UDP, Type: C.SHADOWSOCKS,
+				SrcIP: src.Addr(), SrcPort: src.Port(), DstIP: dst.Addr(), DstPort: dst.Port(),
+			})
+		}
+	}
+	taken := func(flow C.UDPFlow) func() bool {
+		return func() bool { f := flow.(*flowState); return f.sender.Load() != nil && f.queued.Load() == 0 }
+	}
+	released := func(flow C.UDPFlow, id string) func() bool {
+		return func() bool {
+			_, session := natTable.Get(id)
+			f := flow.(*flowState)
+			return f.queued.Load() == 0 && f.sender.Load() == nil && !session
+		}
+	}
+	fast := func(payload byte) C.UDPFastPacket { return &benchFastPacket{[]byte{payload}, dst} }
+
+	flow, ingress := newConn("t133-conn")
+	if flow.Send(fast(0)) {
+		t.Fatal("accepted a datagram without a session")
+	}
+	ingress(1)
+	recv(1)
+	eventually(t, "session did not take the flow", taken(flow))
+	if !flow.Send(fast(2)) {
+		t.Fatal("refused a datagram of an established session")
+	}
+	recv(2)
+
+	f := flow.(*flowState)
+	f.queued.Add(1)
+	if flow.Send(fast(0)) {
+		t.Fatal("overtook a queued regular datagram")
+	}
+	f.queued.Add(-1)
+
+	eventually(t, "flow not released after the session expired", released(flow, "t133-conn"))
+	if flow.Send(fast(0)) {
+		t.Fatal("took a datagram after the session expired")
+	}
+	ingress(3)
+	recv(3)
+	eventually(t, "the next session did not take the flow", taken(flow))
+	if !flow.Send(fast(4)) {
+		t.Fatal("refused a datagram of the next session")
+	}
+	recv(4)
+	// the session reads udpTimeout until it ends: let it end before the test restores it
+	eventually(t, "flow not released after the next session expired", released(flow, "t133-conn"))
+
+	proxy.fail.Store(true)
+	failed, failedIngress := newConn("t133-failed")
+	failedIngress(5)
+	eventually(t, "flow kept after a failed dial", released(failed, "t133-failed"))
+	if failed.Send(fast(0)) {
+		t.Fatal("took a datagram after a failed dial")
+	}
 }
 
 // fakeIPOnly is a fake-ip mapper that knows the pool but holds no records.
