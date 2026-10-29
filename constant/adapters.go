@@ -357,6 +357,15 @@ func (s *packetAdapter) UDPFlow() UDPFlow {
 	return nil
 }
 
+// HandshakeFailure passes a refused session on to the packet's inbound, which may
+// tell the app: TUN answers with ICMP port unreachable (T-154).
+func (s *packetAdapter) HandshakeFailure(err error) error {
+	if f, ok := s.UDPPacket.(interface{ HandshakeFailure(error) error }); ok {
+		return f.HandshakeFailure(err)
+	}
+	return nil
+}
+
 // ReplyConn passes on the batching listener socket of the packet, if any (T-068).
 func (s *packetAdapter) ReplyConn() any {
 	if r, ok := s.UDPPacket.(interface{ ReplyConn() any }); ok {

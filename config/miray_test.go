@@ -55,3 +55,31 @@ func TestMirayRelativeTolerance(t *testing.T) {
 		t.Error("a negative relative-tolerance is accepted")
 	}
 }
+
+func TestMirayUDPTimeout(t *testing.T) {
+	for _, c := range []struct {
+		yaml string
+		want int
+	}{
+		{"mode: rule\n", 300},
+		{"miray: {}\n", 300},
+		{"miray: {udp: {}}\n", 300},
+		{"miray: {udp: {timeout: 0}}\n", 0},
+		{"miray:\n  udp:\n    timeout: 120\n", 120},
+	} {
+		raw, err := UnmarshalRawConfig([]byte(c.yaml))
+		if err != nil {
+			t.Fatalf("%q: %v", c.yaml, err)
+		}
+		general, err := parseGeneral(raw)
+		if err != nil {
+			t.Fatalf("%q: %v", c.yaml, err)
+		}
+		if got := general.Miray.UDP.Timeout; got != c.want {
+			t.Errorf("%q: timeout %v, want %v", c.yaml, got, c.want)
+		}
+	}
+	if _, err := UnmarshalRawConfig([]byte("miray: {udp: {timeout: -1}}\n")); err == nil {
+		t.Error("a negative timeout is accepted")
+	}
+}

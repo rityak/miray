@@ -501,15 +501,16 @@ func handleUDPToLocal(writeBack C.WriteBack, pc *udpActivityConn, sender C.Packe
 	// runs every read in a new goroutine whose stack grows each time (T-090:
 	// 12% of the client's CPU on UDP downloads). The timer moves on with activity
 	// in either direction (T-007).
+	timeout := udpSessionTimeout(oAddrPort.Port())
 	var lastRead atomic.Int64
 	lastRead.Store(time.Now().UnixNano())
 	var idle atomic.Pointer[time.Timer]
-	idle.Store(time.AfterFunc(udpTimeout, func() {
+	idle.Store(time.AfterFunc(timeout, func() {
 		last := lastRead.Load()
 		if w := pc.lastWrite.Load(); w > last {
 			last = w
 		}
-		if d := time.Until(time.Unix(0, last).Add(udpTimeout)); d > 0 {
+		if d := time.Until(time.Unix(0, last).Add(timeout)); d > 0 {
 			idle.Load().Reset(d)
 			return
 		}

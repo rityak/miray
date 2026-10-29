@@ -3,6 +3,7 @@
 package outbound
 
 import (
+	"errors"
 	"net"
 	"sync"
 
@@ -72,7 +73,12 @@ func (c *connectedUDPConn) WriteTo(b []byte, _ net.Addr) (int, error) {
 		return len(b), nil
 	}
 	c.mu.Unlock()
-	return c.UDPConn.Write(b)
+	n, err := c.UDPConn.Write(b)
+	if errors.Is(err, unix.ECONNREFUSED) {
+		// the error of an earlier ICMP, not of this datagram, which was not sent (T-154)
+		n, err = c.UDPConn.Write(b)
+	}
+	return n, err
 }
 
 func (c *connectedUDPConn) ReadFrom(p []byte) (int, net.Addr, error) { return c.reader.ReadFrom(p) }

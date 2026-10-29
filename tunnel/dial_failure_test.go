@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	C "github.com/metacubex/mihomo/constant"
 	N "github.com/metacubex/mihomo/common/net"
+	C "github.com/metacubex/mihomo/constant"
 )
 
 // lingerConn is an inbound without a deferred response (TUN through the system

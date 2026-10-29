@@ -202,6 +202,11 @@ func (c *enhanceUDPConn) recvConnected(fd uintptr) bool {
 	if errno == unix.EAGAIN || errno == unix.EWOULDBLOCK || (errno == 0 && n == 0) {
 		return false // wait for readability, honouring the read deadline
 	}
+	if errno == unix.ECONNREFUSED {
+		// an ICMP unreachable reaches a connected socket only; it must not end the
+		// session (RFC 4787 REQ-11), and an unconnected one never sees it (T-154)
+		return false
+	}
 	if errno != 0 {
 		c.rerr = os.NewSyscallError("recvmmsg", errno)
 	}

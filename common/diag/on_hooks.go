@@ -23,17 +23,19 @@ const (
 	gapStall     = 30 * time.Second       // tcp.stall: client sent, nothing back this long, then an error
 	silentLife   = 5 * time.Second        // tcp.silent: a client that gave up sooner is not counted
 	rebindIn     = 5 * time.Minute        // udp.rebind: a flow back this soon after its idle close
-	udpIdle      = 60 * time.Second       // tunnel.udpTimeout, for the record
 	flapWindow   = 10 * time.Minute       // group.flap: more than 3 alive changes in this window
 	udpDropFloor = 5                      // udp.drop: datagrams lost in the queue of one session
 )
 
 var (
+	udpIdle   atomic.Int64 // Config.UDPIdle, miray's default until a config
 	lookupMu  sync.RWMutex
 	protoFn   func(string) string
 	connsFn   func() (int, int)
 	protoMemo sync.Map // node → proto, cleared on a config
 )
+
+func init() { udpIdle.Store(int64(5 * time.Minute)) }
 
 // SetLookups gives the journal the type of a proxy by name and the open connection counts.
 func SetLookups(proto func(string) string, conns func() (int, int)) {
@@ -96,9 +98,10 @@ func Configured(c Config) {
 		return
 	}
 	start(c)
+	udpIdle.Store(int64(c.UDPIdle))
 	protoMemo.Range(func(k, _ any) bool { protoMemo.Delete(k); return true })
 	event("config", "", "tun", c.TunEnable, "stack", c.TunStack, "dns", c.DNS, "sniffer", c.Sniffer,
-		"proxies", c.Proxies, "groups", c.Groups, "udp_idle_s", int(udpIdle/time.Second))
+		"proxies", c.Proxies, "groups", c.Groups, "udp_idle_s", int(c.UDPIdle/time.Second))
 }
 
 // Trace follows the dial of one proxied connection through its context.
@@ -419,7 +422,7 @@ func UDPStarted(key string, d Dial) {
 	idleClosed.Unlock()
 	if ok && time.Since(at) < rebindIn {
 		event("udp.rebind", d.Proxy, "dst", dst(d.Host, d.IP, d.Port), "gap_s", int(time.Since(at)/time.Second),
-			"idle_s", int(udpIdle/time.Second), "in", d.Inbound)
+			"idle_s", int(time.Duration(udpIdle.Load())/time.Second), "in", d.Inbound)
 	}
 }
 

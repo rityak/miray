@@ -1,6 +1,8 @@
 package executor
 
 import (
+	"time"
+
 	"github.com/metacubex/mihomo/common/diag"
 	"github.com/metacubex/mihomo/config"
 	C "github.com/metacubex/mihomo/constant"
@@ -14,6 +16,10 @@ func diagConfigured(cfg *config.Config) {
 		Home: C.Path.HomeDir(), Version: C.Version, Built: C.BuildTime,
 		TunEnable: cfg.General.Tun.Enable, TunStack: cfg.General.Tun.Stack.String(), DNS: "off",
 		Proxies: map[string]int{}, Groups: map[string]int{},
+		UDPIdle: time.Duration(cfg.General.Miray.UDP.Timeout) * time.Second,
+	}
+	if c.UDPIdle == 0 {
+		c.UDPIdle = 60 * time.Second // mihomo's, as tunnel takes 0
 	}
 	if cfg.DNS != nil && cfg.DNS.Enable {
 		c.DNS = cfg.DNS.EnhancedMode.String()

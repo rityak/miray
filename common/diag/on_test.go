@@ -371,7 +371,7 @@ func TestUDPOneWayDropsAndRebind(t *testing.T) {
 		strings.Contains(drops[0]["write_error"].(string), "203.0") {
 		t.Fatalf("drops %v", drops)
 	}
-	if got := collect(t, "udp.rebind", m); len(got) != 1 || got[0]["idle_s"] != float64(60) {
+	if got := collect(t, "udp.rebind", m); len(got) != 1 || got[0]["idle_s"] != float64(300) {
 		t.Fatalf("rebind %v", got)
 	}
 }

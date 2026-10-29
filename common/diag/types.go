@@ -61,4 +61,5 @@ type Config struct {
 	Sniffer   bool
 	Proxies   map[string]int // type → count
 	Groups    map[string]int
+	UDPIdle   time.Duration // miray.udp.timeout, for the record
 }

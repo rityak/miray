@@ -483,6 +483,7 @@ func updateGeneral(general *config.General, logging bool) {
 	dialer.SetTcpConcurrent(general.TCPConcurrent)
 	dialer.SetUnspecifiedAsBlock(general.Miray.DNS.UnspecifiedAsBlock)
 	outboundgroup.SetRelativeTolerance(general.Miray.ProxyGroups.RelativeTolerance)
+	tunnel.SetUDPTimeout(time.Duration(general.Miray.UDP.Timeout) * time.Second)
 	if logging && general.TCPConcurrent {
 		log.Infoln("Use tcp concurrent")
 	}

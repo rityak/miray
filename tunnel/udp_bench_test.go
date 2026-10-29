@@ -106,7 +106,7 @@ func BenchmarkSetReadDeadline(b *testing.B) {
 	defer udp.Close()
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		_ = udp.SetReadDeadline(time.Now().Add(udpTimeout))
+		_ = udp.SetReadDeadline(time.Now().Add(udpSessionTimeout(0)))
 	}
 }
 

@@ -40,9 +40,9 @@ func TestUDPIdleTimeoutLazyDeadline(t *testing.T) {
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
-			old := udpTimeout
-			udpTimeout = 200 * time.Millisecond
-			defer func() { udpTimeout = old }()
+			old := udpTimeout.Load()
+			udpTimeout.Store(int64(200 * time.Millisecond))
+			defer udpTimeout.Store(old)
 
 			udp, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
 			if err != nil {
@@ -74,7 +74,7 @@ func TestUDPIdleTimeoutLazyDeadline(t *testing.T) {
 			}
 			select {
 			case <-done:
-			case <-time.After(3 * udpTimeout):
+			case <-time.After(3 * 200 * time.Millisecond):
 				t.Fatal("session not closed after becoming idle")
 			}
 		})

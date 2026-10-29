@@ -73,9 +73,6 @@ var (
 	// Outbound Rule
 	mode = atomic.NewInt32Enum(Rule)
 
-	// default timeout for UDP session
-	udpTimeout = 60 * time.Second
-
 	findProcessMode = atomic.NewInt32Enum(process.FindProcessStrict)
 
 	snifferDispatcher *sniffer.Dispatcher
@@ -713,6 +710,11 @@ func handleUDPConn(packet C.PacketAdapter) {
 				diag.DialDone(trace, diagDial(metadata, rule, proxy), rawPc.Chains())
 				diag.UDPStarted(diagFlow(metadata), diagDial(metadata, rule, proxy))
 			}
+			if rawPc.Chains().Last() == "REJECT" {
+				// the app learns it at once (T-154); the session stays and drops the
+				// rest of the flow, so a flood is not routed and logged per datagram
+				reportUDPFailure(packet, errRejected)
+			}
 
 			pc := &udpActivityConn{PacketConn: statistic.NewUDPTracker(rawPc, statistic.DefaultManager, metadata, rule, 0, 0, true)}
 
@@ -728,6 +730,7 @@ func handleUDPConn(packet C.PacketAdapter) {
 			pc, proxy, err := dial()
 			src := netip.AddrPortFrom(metadata.SrcIP.Unmap(), metadata.SrcPort)
 			if err != nil {
+				reportUDPFailure(packet, err) // before Close drops the datagram
 				sender.Close()
 				natTable.Delete(key)
 				if flow, ok := udpFlows.Load(src); ok && metadata.Type == C.TUN {
@@ -953,6 +956,14 @@ func needHandshakeForRead(conn net.Conn) bool {
 // reset of the SYN (T-153). Any other connection is reset on close instead of
 // closed cleanly (RFC 9293 §3.10.7.1, RFC 1122 §4.2.2.13; sing-box does the same),
 // so the app sees a refused connection rather than an empty reply.
+// reportUDPFailure tells the inbound of a session's first datagram that the session
+// was refused: TUN answers the app with ICMP port unreachable (T-154).
+func reportUDPFailure(packet C.UDPPacket, err error) {
+	if f, ok := packet.(interface{ HandshakeFailure(error) error }); ok {
+		_ = f.HandshakeFailure(err)
+	}
+}
+
 func reportDialFailure(conn net.Conn, err error) {
 	if _, ok := common.Cast[network.HandshakeFailure](conn); ok {
 		_ = network.ReportHandshakeFailure(conn, err)

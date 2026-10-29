@@ -279,6 +279,8 @@ func (h *ListenerHandler) NewPacket(ctx context.Context, key netip.AddrPort, buf
 		rAddr:  metadata.Source.UDPAddr(),
 		buff:   buffer,
 		reply:  getReplyConn(ctx),
+
+		refusable: true,
 	}
 	if h.Type != C.TUN { // make the handler-related SNAT key for not TUN listener
 		connID := fmt.Sprintf("%s:%s", h.handlerId, key)
@@ -375,6 +377,8 @@ type packet struct {
 	buff   *buf.Buffer
 	reply  *ReplyConn // nil unless the listener batches replies (T-068)
 	flow   C.UDPFlow  // fast path of the packet's connection, nil for NewPacket (T-133)
+
+	refusable bool // NewPacket: the writer is the datagram's own and may refuse it (T-154)
 }
 
 // UDPFlow is the fast path the session of this packet takes over.
@@ -417,6 +421,22 @@ func (c *packet) LocalAddr() net.Addr {
 
 func (c *packet) Drop() {
 	c.buff.Release()
+	if c.refusable {
+		// used: its writer need not keep the datagram to refuse it any more (T-154)
+		_ = network.ReportHandshakeSuccess(*c.writer)
+	}
+}
+
+// HandshakeFailure refuses the datagram through its writer where the stack can:
+// TUN answers the app with ICMP port unreachable (T-154).
+func (c *packet) HandshakeFailure(err error) error {
+	if !c.refusable {
+		return nil
+	}
+	if f, ok := common.Cast[network.HandshakeFailure](*c.writer); ok {
+		return f.HandshakeFailure(err)
+	}
+	return nil
 }
 
 func (c *packet) InAddr() net.Addr {
