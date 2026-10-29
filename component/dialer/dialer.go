@@ -6,9 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
-	"os"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 
@@ -23,7 +21,8 @@ const (
 	DefaultTCPTimeout = 5 * time.Second
 	DefaultUDPTimeout = DefaultTCPTimeout
 
-	dualStackFallbackTimeout = 300 * time.Millisecond
+	// connectionAttemptDelay is RFC 8305's Connection Attempt Delay, its recommended value
+	connectionAttemptDelay = 250 * time.Millisecond
 )
 
 var (
@@ -64,32 +63,9 @@ func DialContext(ctx context.Context, network, address string, options ...Option
 	if ips, err = dropUnspecified(ips); err != nil {
 		return nil, err
 	}
-	// shortcut: custom dialers retain their context; audit stream lifetimes before canceling their pending dials.
-	switch opt.netDialer.(type) {
-	case nil, *net.Dialer:
-		if len(ips) > 1 {
-			var cancel context.CancelFunc
-			ctx, cancel = context.WithCancel(ctx)
-			defer cancel()
-		}
-	}
-
-	tcpConcurrent := GetTcpConcurrent()
-
 	switch network {
-	case "tcp4", "tcp6", "udp4", "udp6":
-		if tcpConcurrent {
-			return parallelDialContext(ctx, network, ips, port, opt)
-		}
-		return serialDialContext(ctx, network, ips, port, opt)
-	case "tcp", "udp":
-		if tcpConcurrent {
-			if opt.prefer != 4 && opt.prefer != 6 {
-				return parallelDialContext(ctx, network, ips, port, opt)
-			}
-			return dualStackDialContext(ctx, parallelDialContext, network, ips, port, opt)
-		}
-		return dualStackDialContext(ctx, serialDialContext, network, ips, port, opt)
+	case "tcp", "udp", "tcp4", "tcp6", "udp4", "udp6":
+		return happyEyeballsDial(ctx, network, happyEyeballsOrder(ips, opt.prefer), port, opt)
 	default:
 		return nil, ErrorInvalidedNetworkStack
 	}
@@ -240,141 +216,69 @@ func ICMPControl(destination netip.Addr) func(network, address string, conn sysc
 
 type dialFunc func(ctx context.Context, network string, ips []netip.Addr, port string, opt option) (net.Conn, error)
 
-func dualStackDialContext(ctx context.Context, dialFn dialFunc, network string, ips []netip.Addr, port string, opt option) (net.Conn, error) {
+// happyEyeballsOrder interleaves the families, the preferred one first, each in
+// its own order (RFC 8305 §4, First Address Family Count 1): IPv6 first unless
+// IPv4 is preferred.
+func happyEyeballsOrder(ips []netip.Addr, prefer int) []netip.Addr {
 	ipv4s, ipv6s := resolver.SortationAddr(ips)
-	if len(ipv4s) == 0 && len(ipv6s) == 0 {
-		return nil, ErrorNoIpAddress
+	first, second := ipv6s, ipv4s
+	if prefer == 4 {
+		first, second = ipv4s, ipv6s
 	}
-	if len(ipv4s) == 0 && len(ipv6s) != 0 {
-		return dialFn(ctx, network, ipv6s, port, opt)
-	}
-	if len(ipv4s) != 0 && len(ipv6s) == 0 {
-		return dialFn(ctx, network, ipv4s, port, opt)
-	}
-
-	preferIPVersion := opt.prefer
-	switch preferIPVersion {
-	case 4:
-		return staggeredDialContext(ctx, dialFn, network, ipv4s, ipv6s, port, opt)
-	case 6:
-		return staggeredDialContext(ctx, dialFn, network, ipv6s, ipv4s, port, opt)
-	}
-	fallbackTicker := time.NewTicker(dualStackFallbackTimeout)
-	defer fallbackTicker.Stop()
-
-	results := make(chan dialResult)
-	returned := make(chan struct{})
-	defer close(returned)
-
-	var wg sync.WaitGroup
-
-	racer := func(ips []netip.Addr, isPrimary bool) {
-		defer wg.Done()
-		result := dialResult{isPrimary: isPrimary}
-		defer func() {
-			select {
-			case results <- result:
-			case <-returned:
-				if result.Conn != nil && result.error == nil {
-					_ = result.Conn.Close()
-				}
-			}
-		}()
-		result.Conn, result.error = dialFn(ctx, network, ips, port, opt)
-	}
-
-	if len(ipv4s) != 0 {
-		wg.Add(1)
-		go racer(ipv4s, preferIPVersion != 6)
-	}
-
-	if len(ipv6s) != 0 {
-		wg.Add(1)
-		go racer(ipv6s, preferIPVersion != 4)
-	}
-
-	go func() {
-		wg.Wait()
-		close(results)
-	}()
-
-	var fallback dialResult
-	var errs []error
-
-loop:
-	for {
-		select {
-		case <-fallbackTicker.C:
-			if fallback.error == nil && fallback.Conn != nil {
-				return fallback.Conn, nil
-			}
-		case res, ok := <-results:
-			if !ok {
-				break loop
-			}
-			if res.error == nil {
-				if res.isPrimary {
-					if fallback.error == nil && fallback.Conn != nil {
-						go func() { // close fallback connection in new goroutine to avoid blocking
-							_ = fallback.Conn.Close()
-						}()
-					}
-					return res.Conn, nil
-				}
-				fallback = res
-			} else {
-				if res.isPrimary {
-					errs = append([]error{fmt.Errorf("connect failed: %w", res.error)}, errs...)
-				} else {
-					errs = append(errs, fmt.Errorf("connect failed: %w", res.error))
-				}
-			}
+	ordered := make([]netip.Addr, 0, len(ips))
+	for i := 0; i < len(first) || i < len(second); i++ {
+		if i < len(first) {
+			ordered = append(ordered, first[i])
+		}
+		if i < len(second) {
+			ordered = append(ordered, second[i])
 		}
 	}
-
-	if fallback.error == nil && fallback.Conn != nil {
-		return fallback.Conn, nil
-	}
-	return nil, errors.Join(errs...)
+	return ordered
 }
 
-// staggeredDialContext dials the preferred family first and starts the other
-// one only after dualStackFallbackTimeout or a failure of the first (RFC 8305),
-// instead of two connections for every dial. The first success wins; the
-// other attempt is canceled for a standard net.Dialer, and a late connection
-// is closed (T-011).
-func staggeredDialContext(ctx context.Context, dialFn dialFunc, network string, primary, fallback []netip.Addr, port string, opt option) (net.Conn, error) {
+// happyEyeballsDial tries the addresses in order, each attempt
+// connectionAttemptDelay after the previous one or at once when it fails; the
+// first connection wins, the attempts still running are canceled (RFC 8305 §5,
+// T-155). Before, the addresses of a family went one after another, each with a
+// share of the timeout, and both families at once. A custom dialer keeps the
+// caller's context, as it may bind the stream to it: its late connections are
+// closed instead.
+func happyEyeballsDial(ctx context.Context, network string, ips []netip.Addr, port string, opt option) (net.Conn, error) {
+	if len(ips) == 0 {
+		return nil, ErrorNoIpAddress
+	}
+	if len(ips) == 1 {
+		return dialContext(ctx, network, ips[0], port, opt)
+	}
 	switch opt.netDialer.(type) {
 	case nil, *net.Dialer:
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithCancel(ctx)
 		defer cancel()
 	}
-	results := make(chan dialResult, 2) // buffered: an attempt never blocks after we returned
-	start := func(ips []netip.Addr, isPrimary bool) {
+	results := make(chan dialResult, len(ips)) // buffered: an attempt never blocks after we returned
+	next, pending := 0, 0
+	start := func() {
+		ip := ips[next]
+		next++
+		pending++
 		go func() {
-			result := dialResult{isPrimary: isPrimary}
-			result.Conn, result.error = dialFn(ctx, network, ips, port, opt)
-			results <- result
+			conn, err := dialContext(ctx, network, ip, port, opt)
+			results <- dialResult{ip: ip, Conn: conn, error: err}
 		}()
 	}
-	start(primary, true)
-	timer := time.NewTimer(dualStackFallbackTimeout)
+	start()
+	timer := time.NewTimer(connectionAttemptDelay)
 	defer timer.Stop()
-
-	pending, fallbackStarted := 1, false
-	startFallback := func() {
-		if !fallbackStarted {
-			fallbackStarted = true
-			pending++
-			start(fallback, false)
-		}
-	}
 	var errs []error
 	for pending > 0 {
 		select {
 		case <-timer.C:
-			startFallback()
+			if next < len(ips) {
+				start()
+				timer.Reset(connectionAttemptDelay)
+			}
 		case res := <-results:
 			pending--
 			if res.error == nil {
@@ -389,99 +293,26 @@ func staggeredDialContext(ctx context.Context, dialFn dialFunc, network string, 
 				}
 				return res.Conn, nil
 			}
-			if res.isPrimary {
-				errs = append([]error{fmt.Errorf("connect failed: %w", res.error)}, errs...)
-			} else {
-				errs = append(errs, fmt.Errorf("connect failed: %w", res.error))
-			}
-			startFallback()
-		}
-	}
-	return nil, errors.Join(errs...)
-}
-
-func parallelDialContext(ctx context.Context, network string, ips []netip.Addr, port string, opt option) (net.Conn, error) {
-	if len(ips) == 0 {
-		return nil, ErrorNoIpAddress
-	}
-	if len(ips) == 1 {
-		return dialContext(ctx, network, ips[0], port, opt)
-	}
-	results := make(chan dialResult)
-	returned := make(chan struct{})
-	defer close(returned)
-	racer := func(ctx context.Context, ip netip.Addr) {
-		result := dialResult{isPrimary: true, ip: ip}
-		defer func() {
-			select {
-			case results <- result:
-			case <-returned:
-				if result.Conn != nil && result.error == nil {
-					_ = result.Conn.Close()
+			errs = append(errs, fmt.Errorf("connect failed: %w", res.error))
+			if next < len(ips) {
+				start()
+				if !timer.Stop() {
+					select {
+					case <-timer.C:
+					default:
+					}
 				}
+				timer.Reset(connectionAttemptDelay)
 			}
-		}()
-		result.Conn, result.error = dialContext(ctx, network, ip, port, opt)
-	}
-
-	for _, ip := range ips {
-		go racer(ctx, ip)
-	}
-	var errs []error
-	for i := 0; i < len(ips); i++ {
-		res := <-results
-		if res.error == nil {
-			return res.Conn, nil
-		}
-		errs = append(errs, res.error)
-	}
-
-	if len(errs) > 0 {
-		return nil, errors.Join(errs...)
-	}
-	return nil, os.ErrDeadlineExceeded
-}
-
-func serialDialContext(ctx context.Context, network string, ips []netip.Addr, port string, opt option) (net.Conn, error) {
-	if len(ips) == 0 {
-		return nil, ErrorNoIpAddress
-	}
-	var errs []error
-	for i, ip := range ips {
-		if conn, err := dialAttempt(ctx, network, ip, port, opt, len(ips)-i); err == nil {
-			return conn, nil
-		} else {
-			errs = append(errs, err)
 		}
 	}
 	return nil, errors.Join(errs...)
-}
-
-// dialAttempt dials one of the remaining addresses. With a deadline and more
-// addresses left, the attempt gets an equal share of the remaining budget, so a
-// blackholed first address cannot use it all (T-011). Only a standard
-// net.Dialer gets the shorter context: a custom dialer may bind the returned
-// stream to it.
-func dialAttempt(ctx context.Context, network string, ip netip.Addr, port string, opt option, remaining int) (net.Conn, error) {
-	deadline, ok := ctx.Deadline()
-	if !ok || remaining <= 1 {
-		return dialContext(ctx, network, ip, port, opt)
-	}
-	switch opt.netDialer.(type) {
-	case nil, *net.Dialer:
-	default:
-		return dialContext(ctx, network, ip, port, opt)
-	}
-	attemptCtx, cancel := context.WithDeadline(ctx, time.Now().Add(time.Until(deadline)/time.Duration(remaining)))
-	defer cancel() // an established net.Conn is not affected by its dial context
-	return dialContext(attemptCtx, network, ip, port, opt)
 }
 
 type dialResult struct {
 	ip netip.Addr
 	net.Conn
 	error
-	isPrimary bool
 }
 
 func parseAddr(ctx context.Context, network, address string, preferResolver resolver.Resolver) ([]netip.Addr, string, error) {
