@@ -22,6 +22,7 @@ order: 1
 | `proxies`: `trusttunnel` | Пока потоки передают данные, `_check` раз в 30 с без `health-check`; по QUIC — PING раз в 10 с | [trusttunnel](config/proxies/trusttunnel.md) |
 | `listeners`: `hysteria2`, `tuic` | На остановке и reload соединения закрываются с CONNECTION_CLOSE; на остановке закрываются все `listeners:`, не только TUN | [listeners](config/inbound/listeners/index.md), [hysteria2](config/inbound/listeners/hysteria2.md), [tuic](config/inbound/listeners/tuic.md) |
 | `tls.custom-certifactes` | Действуют и для прокси, которые собирают TLS при создании (hysteria2, tuic, HTTPS, TLS-SOCKS5) | [TLS](config/tls.md) (в вики mihomo блок не описан) |
+| `dns` | Просроченная запись кеша — не дольше 3 дней после истечения; OPT в ответе свой и только клиенту с EDNS; `ecs` — в OPT запроса, без второго OPT; соединения `tcp://`/`tls://` не берутся из пула после 10 с простоя, забытое сервером заменяется за 2 с | [DNS](config/dns/index.md) |
 | DNS: адрес `0.0.0.0`/`::` в ответе | Блокировка: отказ сразу, без повторов и без сокета | [miray.dns](config/miray/dns.md) |
 | Reload (`PUT /configs`) | providers грузятся, пока работает старый конфиг; кеш DNS переживает reload без изменений `dns:`; открытые UDP-сессии не рвутся; новое TCP-соединение ждёт конца reload до 5 с; `GET /configs` отдаёт блок `miray` | [API](api/index.md) |
 

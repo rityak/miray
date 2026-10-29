@@ -21,11 +21,27 @@ type client struct {
 	schema string
 	// idle keeps finished tcp:// connections for the next query (RFC 7766
 	// connection reuse) instead of a new handshake per query (T-028).
-	idle chan net.Conn
+	idle chan idleConn
 }
 
 // tcpIdleConnections bounds the reused connections kept per tcp:// server.
 const tcpIdleConnections = 4
+
+const (
+	// tcpIdleTimeout: a pooled tcp:// or DoT connection idle longer is closed, not
+	// reused. Servers close theirs after 10–30 s (RFC 7766 §6.2.3), and one that
+	// a server or NAT forgot silently cost the query its whole timeout (T-156).
+	tcpIdleTimeout = 10 * time.Second
+	// reusedAttemptTimeout bounds a query on a pooled connection: without an
+	// answer by then it is sent again on a new connection, within the query's
+	// own timeout.
+	reusedAttemptTimeout = 2 * time.Second
+)
+
+type idleConn struct {
+	net.Conn
+	since time.Time
+}
 
 var _ dnsClient = (*client)(nil)
 
@@ -48,13 +64,18 @@ func (c *client) ExchangeContext(ctx context.Context, m *D.Msg) (*D.Msg, error) 
 			return nil, err
 		}
 	}
-	msg, err := c.exchange(ctx, conn, network, addr, m)
+	timeout := resolver.DefaultDNSTimeout
+	if reused {
+		timeout = reusedAttemptTimeout
+	}
+	msg, err := c.exchange(ctx, conn, network, addr, m, timeout)
 	if err != nil && reused && ctx.Err() == nil {
-		// The server may have closed an idle connection; retry once on a fresh one.
+		// The server may have closed an idle connection, or forgotten it without a
+		// word; retry once on a fresh one.
 		if conn, err = c.dialer.DialContext(ctx, network, addr); err != nil {
 			return nil, err
 		}
-		msg, err = c.exchange(ctx, conn, network, addr, m)
+		msg, err = c.exchange(ctx, conn, network, addr, m, resolver.DefaultDNSTimeout)
 	}
 	return msg, err
 }
@@ -63,7 +84,7 @@ func (c *client) ExchangeContext(ctx context.Context, m *D.Msg) (*D.Msg, error) 
 // exchange and closed otherwise. Only this goroutine pools it, after the
 // result arrived: a cancel racing with the end of the exchange closes conn,
 // and a closed conn must not reach the pool.
-func (c *client) exchange(ctx context.Context, conn net.Conn, network, addr string, m *D.Msg) (*D.Msg, error) {
+func (c *client) exchange(ctx context.Context, conn net.Conn, network, addr string, m *D.Msg, timeout time.Duration) (*D.Msg, error) {
 	type result struct {
 		msg   *D.Msg
 		err   error
@@ -73,7 +94,7 @@ func (c *client) exchange(ctx context.Context, conn net.Conn, network, addr stri
 	go func() {
 		dClient := &D.Client{
 			UDPSize: 4096,
-			Timeout: 5 * time.Second,
+			Timeout: timeout,
 		}
 		dConn := &D.Conn{
 			Conn:    conn,
@@ -118,11 +139,17 @@ func (c *client) takeIdle() (net.Conn, bool) {
 	if c.idle == nil {
 		return nil, false
 	}
-	select {
-	case conn := <-c.idle:
-		return conn, true
-	default:
-		return nil, false
+	for {
+		select {
+		case conn := <-c.idle:
+			if time.Since(conn.since) > tcpIdleTimeout {
+				_ = conn.Close()
+				continue
+			}
+			return conn.Conn, true
+		default:
+			return nil, false
+		}
 	}
 }
 
@@ -132,7 +159,7 @@ func (c *client) putIdle(conn net.Conn) {
 		return
 	}
 	select {
-	case c.idle <- conn:
+	case c.idle <- idleConn{conn, time.Now()}:
 	default:
 		_ = conn.Close()
 	}
@@ -159,7 +186,7 @@ func newClient(addr string, resolver resolver.Resolver, netType string, params m
 	}
 	if strings.HasPrefix(netType, "tcp") {
 		c.schema = "tcp"
-		c.idle = make(chan net.Conn, tcpIdleConnections)
+		c.idle = make(chan idleConn, tcpIdleConnections)
 	}
 	return c
 }

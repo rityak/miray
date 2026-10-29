@@ -25,6 +25,11 @@ type dnsClient interface {
 	ResetConnection()
 }
 
+// maxStale bounds how long after expiry a record is still served at once while
+// it is refreshed (RFC 8767 §5: 1 to 3 days; sing-box's optimistic cache keeps
+// 3, T-156). Without it a record of a name not asked for days came back as is.
+const maxStale = 3 * 24 * time.Hour
+
 type dnsCache interface {
 	GetWithExpire(key string) (*D.Msg, time.Time, bool)
 	SetWithExpire(key string, value *D.Msg, expire time.Time)
@@ -170,6 +175,9 @@ func (r *Resolver) ExchangeContext(ctx context.Context, m *D.Msg) (msg *D.Msg, e
 	q := m.Question[0]
 	domain := msgToDomain(m)
 	msg, expireTime, hit := getMsgFromCache(r.cache, q)
+	if hit && time.Since(expireTime) > maxStale {
+		hit = false // too old to serve even while refreshing: ask now
+	}
 	if hit {
 		log.Debugln("[DNS] cache hit %s --> %s, expire at %s", domain, msgToLogString(msg), expireTime.Format("2006-01-02 15:04:05"))
 		now := time.Now()

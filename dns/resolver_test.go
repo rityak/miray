@@ -41,3 +41,42 @@ func TestLookupIPWaitsForAAAAWhenAFails(t *testing.T) {
 		t.Fatalf("LookupIP = %v, %v; want [2001:db8::1]", ips, err)
 	}
 }
+
+// aClient answers A with one address.
+type aClient struct{ addr netip.Addr }
+
+func (c aClient) ExchangeContext(_ context.Context, m *D.Msg) (*D.Msg, error) {
+	msg := new(D.Msg)
+	msg.SetReply(m)
+	msg.Answer = []D.RR{&D.A{Hdr: D.RR_Header{Name: m.Question[0].Name, Rrtype: D.TypeA, Class: D.ClassINET, Ttl: 60}, A: c.addr.AsSlice()}}
+	return msg, nil
+}
+
+func (aClient) Address() string  { return "fake" }
+func (aClient) ResetConnection() {}
+
+// A stale record is served at once while refreshed, but not past maxStale after
+// its expiry: then the name is asked again first (RFC 8767 §5, T-156).
+func TestStaleRecordLimit(t *testing.T) {
+	stale, fresh := netip.MustParseAddr("192.0.2.1"), netip.MustParseAddr("192.0.2.2")
+	for _, c := range []struct {
+		expired time.Duration
+		want    netip.Addr
+	}{{time.Hour, stale}, {maxStale + time.Hour, fresh}} {
+		r := NewResolverFromClient(aClient{fresh})
+		q := D.Question{Name: "stale.example.", Qtype: D.TypeA, Qclass: D.ClassINET}
+		old := new(D.Msg)
+		old.SetQuestion(q.Name, q.Qtype)
+		old.Answer = []D.RR{&D.A{Hdr: D.RR_Header{Name: q.Name, Rrtype: D.TypeA, Class: D.ClassINET, Ttl: 60}, A: stale.AsSlice()}}
+		r.cache.SetWithExpire(q.String(), old, time.Now().Add(-c.expired))
+		m := new(D.Msg)
+		m.SetQuestion(q.Name, q.Qtype)
+		msg, err := r.ExchangeContext(context.Background(), m)
+		if err != nil || len(msg.Answer) != 1 {
+			t.Fatalf("expired %v: %v %v", c.expired, msg, err)
+		}
+		if got, _ := netip.AddrFromSlice(msg.Answer[0].(*D.A).A); got != c.want {
+			t.Errorf("expired %v: %v, want %v", c.expired, got, c.want)
+		}
+	}
+}

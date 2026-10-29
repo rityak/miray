@@ -28,7 +28,7 @@ type dnsOverTLS struct {
 	disableReuse   bool
 
 	access      sync.Mutex
-	connections deque.Deque[net.Conn] // LIFO
+	connections deque.Deque[idleConn] // LIFO
 }
 
 var _ dnsClient = (*dnsOverTLS)(nil)
@@ -62,8 +62,13 @@ func (t *dnsOverTLS) ExchangeContext(ctx context.Context, m *D.Msg) (*D.Msg, err
 
 			if !t.disableReuse {
 				t.access.Lock()
-				if t.connections.Len() > 0 {
-					conn = t.connections.PopBack()
+				for conn == nil && t.connections.Len() > 0 {
+					idle := t.connections.PopBack()
+					if time.Since(idle.since) > tcpIdleTimeout { // T-156
+						go idle.Close()
+						continue
+					}
+					conn = idle.Conn
 				}
 				t.access.Unlock()
 			}
@@ -78,7 +83,10 @@ func (t *dnsOverTLS) ExchangeContext(ctx context.Context, m *D.Msg) (*D.Msg, err
 
 			dClient := &D.Client{
 				UDPSize: 4096,
-				Timeout: 5 * time.Second,
+				Timeout: resolver.DefaultDNSTimeout,
+			}
+			if isOldConn {
+				dClient.Timeout = reusedAttemptTimeout // a forgotten one must leave time to retry (T-156)
 			}
 			dConn := &D.Conn{
 				Conn:    conn,
@@ -101,7 +109,7 @@ func (t *dnsOverTLS) ExchangeContext(ctx context.Context, m *D.Msg) (*D.Msg, err
 					oldConn := t.connections.PopFront()
 					go oldConn.Close() // close in a new goroutine, not blocking the current task
 				}
-				t.connections.PushBack(conn)
+				t.connections.PushBack(idleConn{conn, time.Now()})
 				t.access.Unlock()
 			} else {
 				_ = conn.Close()
