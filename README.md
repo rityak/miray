@@ -33,6 +33,7 @@
 - Полный TCP-чанк (64 КиБ данных и тег AEAD, так шлёт сервер sing-box) читается в буфер из пула, а не в новый буфер из кучи на каждый чанк: в пуле `common/pool` и `sing` есть класс 72 КиБ, `buf.NewSize` берёт из пула и выше 64 КиБ.
 
 ### QUIC: hysteria2 и tuic
+- `type: quri` — клиентский HTTP/3 транспорт с HTTP/2 fallback и одним фиксированным выходом на relay-сессию. Поддерживает `quri://` в подписках; сервер quri и внешний сайт запускаются отдельно. Конфигурация — [quri](miray-docs/config/proxies/quri.md).
 - BBR не переполняет очередь канала периодическими пробами: нет всплесков задержки под загрузкой.
 - Отправка GSO-пачками, приём через UDP GRO (`MIRAY_QUIC_GRO=off` выключает), на Windows — USO.
 - Очередь входящих пакетов 4096 вместо 256.
@@ -97,6 +98,8 @@
 
 - [rityak/miray](https://github.com/rityak/miray) — ядро
 - [rityak/quic-go](https://github.com/rityak/quic-go) — QUIC для hysteria2 и tuic
+- [rityak/quri](https://github.com/rityak/quri) — независимый HTTP relay SDK
+- [rityak/http](https://github.com/rityak/http) — HTTP/2 Extended CONNECT и независимое полузакрытие ответа
 - [rityak/sing-quic](https://github.com/rityak/sing-quic) — hysteria2
 - [rityak/sing-tun](https://github.com/rityak/sing-tun) — TUN
 - [rityak/mipstack](https://github.com/rityak/mipstack) — сетевой стек mips

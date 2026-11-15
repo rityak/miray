@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/metacubex/mihomo/log"
+	quri "github.com/rityak/quri/client"
 )
 
 // ConvertsV2Ray convert V2Ray subscribe proxies data to mihomo proxies config
@@ -34,6 +35,19 @@ func ConvertsV2Ray(buf []byte) ([]map[string]any, error) {
 
 		scheme = strings.ToLower(scheme)
 		switch scheme {
+		case "quri":
+			if _, err := quri.ParseLink(line); err != nil {
+				continue
+			}
+			u, err := url.Parse(line)
+			if err != nil {
+				continue
+			}
+			name := u.Fragment
+			if name == "" {
+				name = "quri-" + u.Hostname()
+			}
+			proxies = append(proxies, map[string]any{"type": "quri", "name": uniqueName(names, name), "profile": line})
 		case "hysteria":
 			urlHysteria, err := url.Parse(line)
 			if err != nil {

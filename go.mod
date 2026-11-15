@@ -1,6 +1,6 @@
 module github.com/metacubex/mihomo
 
-go 1.20
+go 1.22
 
 require (
 	github.com/bahlo/generic-list-go v0.2.0
@@ -53,6 +53,7 @@ require (
 	github.com/mroth/weightedrand/v2 v2.1.0
 	github.com/openacid/low v0.1.21
 	github.com/rasky/go-lzo v0.0.0-20200203143853-96a758eda86e
+	github.com/rityak/quri v0.0.0-20261115183804-9bd5a6d26d96
 	github.com/samber/lo v1.53.0
 	github.com/sirupsen/logrus v1.9.4
 	github.com/stretchr/testify v1.12.1
@@ -160,7 +161,7 @@ replace github.com/metacubex/smux => github.com/rityak/smux v0.0.0-2026101509503
 
 replace github.com/metacubex/utls => github.com/rityak/utls v0.0.0-20261015104218-792958f984ea
 
-replace github.com/metacubex/quic-go => github.com/rityak/quic-go v0.61.1-0.20261029153018-dddc617d9406
+replace github.com/metacubex/quic-go => github.com/rityak/quic-go v0.61.1-0.20261115171335-8f0b372b74bf
 
 replace github.com/metacubex/sing-quic => github.com/rityak/sing-quic v0.0.0-20261029161150-77f48ef98d43
 
@@ -169,3 +170,5 @@ replace github.com/metacubex/sing-shadowsocks => github.com/rityak/sing-shadowso
 replace github.com/metacubex/sing-shadowsocks2 => github.com/rityak/sing-shadowsocks2 v0.2.9-0.20261017012153-da4a7a72dbf5
 
 replace github.com/metacubex/sing => github.com/rityak/sing v0.5.9-0.20261025041621-d2aa8f83bd64
+
+replace github.com/metacubex/http => github.com/rityak/http v0.1.9-0.20261115170447-fb1f316d86fc
