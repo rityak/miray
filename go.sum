@@ -207,10 +207,10 @@ github.com/rityak/http v0.1.9-0.20261115170447-fb1f316d86fc h1:t+KhQ15y+ik85BvMR
 github.com/rityak/http v0.1.9-0.20261115170447-fb1f316d86fc/go.mod h1:Nxx0zZAo2AhRfanyL+fmmK6ACMtVsfpwIl1aFAik2Eg=
 github.com/rityak/mipstack v0.0.0-20261024080511-2e07f8141286 h1:D3BLRlTerCF1rh+tmDx4lZyhtq7WlFMzoYVI140IzRs=
 github.com/rityak/mipstack v0.0.0-20261024080511-2e07f8141286/go.mod h1:+bbwALZI0pbi2auSG5A3ptdpV2DZ2eLObziXo+P7oj0=
-github.com/rityak/quic-go v0.61.1-0.20261115171335-8f0b372b74bf h1:8cUgw0AJ8gBf14pWA66J+/2bkKqHUhXRzzRlyT2NDBQ=
-github.com/rityak/quic-go v0.61.1-0.20261115171335-8f0b372b74bf/go.mod h1:KTmibo7vZo0gCxdFWrPEQ/u/RGt92mJkrXDE2Qg2/AU=
-github.com/rityak/quri v0.0.0-20261115183804-9bd5a6d26d96 h1:t6E41axZShVw/tdbqXHfu+3IDe2QSzH8+NvLVOK5Xbc=
-github.com/rityak/quri v0.0.0-20261115183804-9bd5a6d26d96/go.mod h1:JaYqwxHlccI5Dy9528ThUxlL3k+IOXx5KMDgKBYXpks=
+github.com/rityak/quic-go v0.61.1-0.20261116090222-81fc43db6260 h1:3IuToko/QdqKW7Q0GKhhgM0ohMZ1m6HCeon6HHv81UU=
+github.com/rityak/quic-go v0.61.1-0.20261116090222-81fc43db6260/go.mod h1:KTmibo7vZo0gCxdFWrPEQ/u/RGt92mJkrXDE2Qg2/AU=
+github.com/rityak/quri v0.0.0-20261116091500-2d4cd27fe4ef h1:SYrVR6RR5ZCjVWp+Pa/svzfrcWqIbdJ1F5tmwsA30LM=
+github.com/rityak/quri v0.0.0-20261116091500-2d4cd27fe4ef/go.mod h1:ls2aDjOHmvXeyZriuSL99arAKrHR7/qTFrFqEjsBT/Q=
 github.com/rityak/restls-client-go v0.0.0-20261015085035-a573679ec5c6 h1:VivLBgQMYjtPLzDpYkdQctxbPw0xNnN5sQweGlBAvws=
 github.com/rityak/restls-client-go v0.0.0-20261015085035-a573679ec5c6/go.mod h1:BN/U52vPw7j8VTSh2vleD/MnmVKCov84mS5VcjVHH4g=
 github.com/rityak/sing v0.5.9-0.20261025041621-d2aa8f83bd64 h1:Dc0x7jWLe9S7sLh3m1h54fO1ndwYEjQwc42VTamtA2E=

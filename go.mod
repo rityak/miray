@@ -53,7 +53,7 @@ require (
 	github.com/mroth/weightedrand/v2 v2.1.0
 	github.com/openacid/low v0.1.21
 	github.com/rasky/go-lzo v0.0.0-20200203143853-96a758eda86e
-	github.com/rityak/quri v0.0.0-20261115183804-9bd5a6d26d96
+	github.com/rityak/quri v0.0.0-20261116091500-2d4cd27fe4ef
 	github.com/samber/lo v1.53.0
 	github.com/sirupsen/logrus v1.9.4
 	github.com/stretchr/testify v1.12.1
@@ -161,7 +161,7 @@ replace github.com/metacubex/smux => github.com/rityak/smux v0.0.0-2026101509503
 
 replace github.com/metacubex/utls => github.com/rityak/utls v0.0.0-20261015104218-792958f984ea
 
-replace github.com/metacubex/quic-go => github.com/rityak/quic-go v0.61.1-0.20261115171335-8f0b372b74bf
+replace github.com/metacubex/quic-go => github.com/rityak/quic-go v0.61.1-0.20261116090222-81fc43db6260
 
 replace github.com/metacubex/sing-quic => github.com/rityak/sing-quic v0.0.0-20261029161150-77f48ef98d43
 
