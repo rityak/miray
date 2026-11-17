@@ -12,6 +12,7 @@ order: 1
 | Блок | Что иначе в miray | Страница |
 |---|---|---|
 | `miray` | Блок есть только в miray: опции по подсистемам | [miray](config/miray/index.md) |
+| `proxies`: `quri` | Клиентский HTTP/3 transport с HTTP/2 fallback, fixed-output relay и импортом `quri://`; независимый TCP FIN, UDP по PMTU в h3 и capsules в h2; сервер и сайт отдельные | [quri](config/proxies/quri.md) |
 | `tun` | `mtu` на Linux по умолчанию 65535 (в mihomo 9000) с откатом на 9000; `gso` по умолчанию включён на Linux у стека `mips`; отказ дозвона и `REJECT` — RST на SYN (`mips`, `gvisor`) или сброс соединения, а не пустой ответ; для UDP — ICMP «порт недоступен» (`mips`, `gvisor`) | [TUN](config/inbound/tun.md) |
 | `rules`: `REJECT` | TCP-соединение закрывается сбросом (RST), а не штатно: приложение видит отказ, а не пустой ответ; через TUN `mips`/`gvisor` — отказ на SYN, на UDP — ICMP «порт недоступен» первой датаграмме сессии | [TUN](config/inbound/tun.md) |
 | UDP-сессии | Сессия без трафика живёт 5 мин (в mihomo 60 с), к портам DNS, NTP, STUN — 10 с; ICMP от сервера прокси не закрывает сессию ss | [miray.udp](config/miray/udp.md) |

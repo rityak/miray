@@ -69,6 +69,13 @@ func ParseProxy(mapping map[string]any, options ...ProxyOption) (C.Proxy, error)
 			break
 		}
 		proxy, err = outbound.NewVless(*vlessOption)
+	case "quri":
+		quriOption := &outbound.QuriOption{BasicOption: basicOption}
+		err = decoder.Decode(mapping, quriOption)
+		if err != nil {
+			break
+		}
+		proxy, err = outbound.NewQuri(*quriOption)
 	case "snell":
 		snellOption := &outbound.SnellOption{BasicOption: basicOption}
 		err = decoder.Decode(mapping, snellOption)

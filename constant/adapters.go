@@ -55,6 +55,7 @@ const (
 	ZeroTier
 	EasyTier
 	GostRelay
+	Quri
 )
 
 const (
@@ -214,6 +215,8 @@ func (at AdapterType) String() string {
 		return "Hysteria"
 	case Hysteria2:
 		return "Hysteria2"
+	case Quri:
+		return "Quri"
 	case WireGuard:
 		return "WireGuard"
 	case Tuic:
